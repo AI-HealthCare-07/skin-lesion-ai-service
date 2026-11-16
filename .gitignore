@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Env & Secrets
+.env
+
+# AI Models & Datasets (용량 큼)
+*.pth
+*.pt
+*.onnx
+data/
+uploads/
+
+# Docker Volumes & OS
+mysql_data/
+qdrant_data/
+.DS_Store
