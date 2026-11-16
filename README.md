@@ -1,5 +1,7 @@
 [code_artifact.md](https://github.com/user-attachments/files/34904218/code_artifact.md)
-# [프로젝트 통합 기획 및 설계서] AI 기반 피부 병변 스크리닝 및 맞춤형 복약·생활 가이드 웹서비스
+# [프로젝트 통합 기획 및 설계서] 
+
+# AI 기반 피부 병변 스크리닝 및 맞춤형 복약·생활 가이드 웹서비스
 
 * **문서 버전:** v1.1 (Security Architecture Integrated)
 * **작성일:** 2026-11-16
