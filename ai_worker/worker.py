@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 import redis
 from sentence_transformers import SentenceTransformer
-from ai_worker.vision_model import SkinLesionGradCAM
 
 # 반드시 ai_worker, backend 임포트보다 맨 위에 위치해야 함!
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -15,6 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ai_worker.vision_model import SkinLesionGradCAM
 from backend import models
 from backend.database import SessionLocal
+
 load_dotenv()
 
 # 1. Redis 보안 연결
@@ -190,6 +190,7 @@ def run_worker():
 
         print(f"📥 작업 수신: {task_id} (Record #{record_id}, 부위: {body_part}, 약물: {meds})")
         db = SessionLocal()
+        image_path = None
 
         try:
             user = db.query(models.User).filter(models.User.user_id == user_id).first()
@@ -203,6 +204,20 @@ def run_worker():
                 body_part=body_part,
                 symptoms=symptoms,
             )
+
+            # [추가] 저신뢰도(15% 미만) 오인식 차단 방어 로직
+            raw_conf = float(vision_result.get("confidence_score", 0))
+            norm_conf = raw_conf / 100.0 if raw_conf > 1.0 else raw_conf
+            if norm_conf < 0.15:
+                sync_task_status(
+                    db,
+                    task_id,
+                    "LOW_CONFIDENCE",
+                    100,
+                    "피부 병변을 명확히 인식할 수 없습니다. 초점을 맞춰 다시 촬영하거나 전문의와 상담하세요.",
+                )
+                print(f"⚠️ [저신뢰도 차단] Task {task_id} (신뢰도: {raw_conf})")
+                continue
 
             lesion_img = db.query(models.LesionImage).filter(models.LesionImage.record_id == record_id).first()
             if lesion_img:
@@ -261,6 +276,12 @@ def run_worker():
             print(f"❌ 작업 실패: {task_id} - {e}")
         finally:
             db.close()
+            # [추가] 추론 완료 후 원본 업로드 이미지 즉시 파기 (샘플 이미지 제외)
+            if image_path and "sample_lesion" not in image_path and os.path.exists(image_path):
+                try:
+                    os.remove(image_path)
+                except OSError:
+                    pass
 
 
 if __name__ == "__main__":

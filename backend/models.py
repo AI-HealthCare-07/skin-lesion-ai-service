@@ -14,6 +14,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from backend.database import Base
+from sqlalchemy import Boolean
 
 
 class User(Base):
@@ -157,3 +158,13 @@ class MedicationSchedule(Base):
 
     user = relationship("User", back_populates="schedules")
     guide = relationship("HealthGuide", back_populates="schedules")
+
+
+class CaregiverShare(Base):
+    __tablename__ = "caregiver_shares"
+
+    share_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    task_id = Column(String(64), index=True, nullable=False)
+    share_token = Column(String(64), unique=True, index=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)

@@ -1,17 +1,22 @@
-from datetime import date, datetime
+from datetime import datetime, timedelta
+import io
 import json
 import os
-import shutil
 import uuid
+import secrets
+from pydantic import BaseModel
+from PIL import Image
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import redis
 from sqlalchemy.orm import Session
-
+from fastapi.staticfiles import StaticFiles
 from backend import models
 from backend.database import Base, SessionLocal, engine, get_db
+from backend.router import router as predict_router
+from sqlalchemy import Boolean
 
 load_dotenv()
 
@@ -21,10 +26,16 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = FastAPI(title="MediGuide AI API", version="0.2.0")
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # 2. CORS 보안 설정
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS", "http://127.0.0.1:5500,http://localhost:3000"
+).split(",")
+
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS", "http://127.0.0.1:5500,http://localhost:3000,http://localhost:5173"
 ).split(",")
 
 app.add_middleware(
@@ -35,14 +46,13 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+# 신규 스크리닝 라우터 연결 (/api/v1/predict, /api/v1/status/{task_id})
+app.include_router(predict_router)
+
 # 3. Redis 보안 연결
 REDIS_HOST = os.getenv("REDIS_HOST", "127.0.0.1")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
-
-if not REDIS_PASSWORD:
-    raise RuntimeError("REDIS_PASSWORD is missing in .env")
-
 redis_client = redis.Redis(
     host=REDIS_HOST,
     port=REDIS_PORT,
@@ -107,13 +117,13 @@ async def create_skin_record(
     if not user:
         raise HTTPException(status_code=404, detail="존재하지 않는 사용자입니다.")
 
-    # (1) 이미지 로컬 저장 (업로드 안 했을 경우 더미 경로 지정)
+    # (1) EXIF 메타데이터 제거 후 이미지 로컬 저장 (업로드 안 했을 경우 더미 경로 지정)
     if image and image.filename:
-        ext = os.path.splitext(image.filename)[1] or ".jpg"
-        saved_filename = f"{uuid.uuid4()}{ext}"
+        raw_bytes = await image.read()
+        saved_filename = f"{uuid.uuid4()}.jpg"
         saved_path = os.path.join(UPLOAD_DIR, saved_filename)
-        with open(saved_path, "wb") as buffer:
-            shutil.copyfileobj(image.file, buffer)
+        clean_img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+        clean_img.save(saved_path, format="JPEG")
     else:
         saved_path = "uploads/sample_lesion.jpg"
 
@@ -213,6 +223,14 @@ def get_analysis_report(task_id: str, db: Session = Depends(get_db)):
     if not task:
         raise HTTPException(status_code=404, detail="존재하지 않는 작업 ID입니다.")
 
+    if task.status == "LOW_CONFIDENCE":
+        return {
+            "success": False,
+            "task_id": task_id,
+            "status": task.status,
+            "message": "피부 병변을 명확히 인식할 수 없습니다. 초점을 맞춰 다시 촬영하거나 전문의와 상담하세요.",
+        }
+
     if task.status != "COMPLETED":
         return {
             "task_id": task_id,
@@ -248,3 +266,111 @@ def get_analysis_report(task_id: str, db: Session = Depends(get_db)):
             "retrieved_sources": guide.retrieved_sources,
         },
     }
+
+class ScheduleCreate(BaseModel):
+    user_id: int = 1
+    drug_name: str
+    dosage_note: str = ""
+    alarm_time: str
+
+
+# 1. 보호자·가족용 큰 글씨 공유 링크 발급 (24시간 유효 토큰)
+@app.post("/api/v1/share/{task_id}")
+def create_caregiver_share(task_id: str, db: Session = Depends(get_db)):
+    screening = db.query(models.ScreeningResult).filter(models.ScreeningResult.task_id == task_id).first()
+    if not screening:
+        raise HTTPException(status_code=404, detail="완료된 분석 리포트를 찾을 수 없습니다.")
+
+    token = secrets.token_urlsafe(16)
+    expires_at = datetime.utcnow() + timedelta(hours=24)
+
+    share_row = models.CaregiverShare(
+        task_id=task_id,
+        share_token=token,
+        expires_at=expires_at,
+    )
+    db.add(share_row)
+    db.commit()
+
+    return {
+        "share_token": token,
+        "expires_at": expires_at.isoformat(),
+        "share_url": f"http://localhost:5173/?share={token}",
+    }
+
+
+# 2. 보호자용 큰 글씨 요약 리포트 조회 (만료 시간 검증 포함)
+@app.get("/api/v1/share/{share_token}")
+def get_caregiver_share(share_token: str, db: Session = Depends(get_db)):
+    share_row = db.query(models.CaregiverShare).filter(models.CaregiverShare.share_token == share_token).first()
+    if not share_row:
+        raise HTTPException(status_code=404, detail="유효하지 않은 공유 링크입니다.")
+    if share_row.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=410, detail="공유 링크의 유효기간(24시간)이 만료되었습니다.")
+
+    screening = db.query(models.ScreeningResult).filter(models.ScreeningResult.task_id == share_row.task_id).first()
+    guide = db.query(models.HealthGuide).filter(models.HealthGuide.task_id == share_row.task_id).first()
+
+    return {
+        "expires_at": share_row.expires_at.isoformat(),
+        "primary_disease_name": screening.primary_disease_name,
+        "risk_level": screening.risk_level,
+        "visual_finding_summary": screening.visual_finding_summary,
+        "dur_warnings": guide.dur_warnings if guide else [],
+        "ftu_dosage_guide": guide.ftu_dosage_guide if guide else {},
+        "medication_guide": guide.medication_guide if guide else [],
+    }
+
+
+# 3. 복약·연고 도포 알림 스케줄 등록
+@app.post("/api/v1/schedules")
+def create_medication_schedule(payload: ScheduleCreate, db: Session = Depends(get_db)):
+    parsed_time = datetime.strptime(payload.alarm_time, "%H:%M").time()
+    item = models.MedicationSchedule(
+        user_id=payload.user_id,
+        drug_name=payload.drug_name,
+        dosage_instruction=payload.dosage_note or "처방 지시에 따라 도포/복용",
+        alert_time=parsed_time,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {
+        "schedule_id": item.schedule_id,
+        "drug_name": item.drug_name,
+        "dosage_note": item.dosage_instruction,
+        "alarm_time": item.alert_time.strftime("%H:%M"),
+        "is_active": item.is_active,
+    }
+
+
+# 4. 복약·연고 도포 알림 목록 조회
+@app.get("/api/v1/schedules")
+def list_medication_schedules(user_id: int = 1, db: Session = Depends(get_db)):
+    rows = (
+        db.query(models.MedicationSchedule)
+        .filter(models.MedicationSchedule.user_id == user_id)
+        .order_by(models.MedicationSchedule.alert_time.asc())
+        .all()
+    )
+    return [
+        {
+            "schedule_id": r.schedule_id,
+            "drug_name": r.drug_name,
+            "dosage_note": r.dosage_instruction,
+            "alarm_time": r.alert_time.strftime("%H:%M"),
+            "is_active": r.is_active,
+        }
+        for r in rows
+    ]
+
+
+# 5. 알림 활성/비활성 토글
+@app.patch("/api/v1/schedules/{schedule_id}/toggle")
+def toggle_medication_schedule(schedule_id: int, db: Session = Depends(get_db)):
+    item = db.query(models.MedicationSchedule).filter(models.MedicationSchedule.schedule_id == schedule_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="스케줄을 찾을 수 없습니다.")
+    item.is_active = not item.is_active
+    db.commit()
+    return {"schedule_id": item.schedule_id, "is_active": item.is_active}
