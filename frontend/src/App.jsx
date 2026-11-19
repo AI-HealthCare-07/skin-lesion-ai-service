@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import "./App.css";
 import { speakKoreanText, triggerMedicationAlert } from "./alertHelper";
 import ReportChatBox from "./ReportChatBox";
+import EmergencyTriageBanner from "./EmergencyTriageBanner";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -829,7 +830,7 @@ export default function App() {
                     </div>
                   )}
                 </div>
-
+<EmergencyTriageBanner symptoms={symptoms} userMemo={userMemo} painScore={painScore} />
                 {report.guide.dur_warnings?.length > 0 ? (
                   report.guide.dur_warnings.map((w, idx) => (
                     <div key={idx} className="alert-danger">
