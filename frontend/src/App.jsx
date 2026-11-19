@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import "./App.css";
 import { speakKoreanText, triggerMedicationAlert } from "./alertHelper";
+import ReportChatBox from "./ReportChatBox";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -922,7 +923,7 @@ export default function App() {
                     </ul>
                   </div>
                 </div>
-
+                  <ReportChatBox report={report} bodyPart={bodyPart} />
                 <div className="disclaimer-bar">※ {report.disclaimer}</div>
               </>
             )}
