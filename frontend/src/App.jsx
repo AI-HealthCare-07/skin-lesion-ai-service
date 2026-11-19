@@ -9,7 +9,7 @@ export default function App() {
   const [sharedData, setSharedData] = useState(null);
   const [shareError, setShareError] = useState(null);
 
-  // [추가] JWT 사용자 인증 및 화면 탭 상태
+  // JWT 사용자 인증 및 화면 탭 상태
   const [currentUser, setCurrentUser] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState("login"); // "login" | "register"
@@ -612,8 +612,8 @@ export default function App() {
         </div>
       ) : (
         <main className="main-container">
-          {/* 좌측: 문진 업로드 + 복약·연고 도포 알림 스케줄러 */}
-          <div>
+          {/* 좌측: 문진 업로드 + 복약·연고 도포 알림 스케줄러 (인쇄 시 자동 숨김) */}
+          <div className="no-print">
             <section className="card">
               <h2 className="card-title">1. 피부 병변 문진 및 사진 업로드</h2>
               <form onSubmit={handleSubmit}>
@@ -741,7 +741,7 @@ export default function App() {
           {/* 우측: 진행 상태 및 통합 분석 리포트 */}
           <section>
             {taskStatus && (
-              <div className="card">
+              <div className="card no-print">
                 <div className="progress-header">
                   <strong>🔬 AI 비동기 분석 파이프라인</strong>
                   <span className="status-pill">{taskStatus.status}</span>
@@ -759,36 +759,99 @@ export default function App() {
               <div className="card empty-state">
                 <h3>병변 사진을 업로드하고 분석을 시작하세요</h3>
                 <p>
-                  분석이 완료되면 보호자용 큰 글씨 공유 링크 발급과 복약 알림 스케줄 등록까지 한 번에 이용할 수 있습니다.
+                  분석이 완료되면 진료용 PDF 출력, 주변 피부과·약국 안내, 보호자용 큰 글씨 공유 링크까지 한 번에 이용할 수 있습니다.
                 </p>
               </div>
             )}
 
             {report && (
               <>
-                {/* 보호자·가족용 큰 글씨 공유 링크 발급 바 */}
-                <div className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+                {/* 인쇄 / PDF 저장 시에만 표시되는 진료 참고용 요약 헤더 */}
+                <div className="print-only-header">
+                  <h2 style={{ margin: 0, color: "#0a4296" }}>🩺 MediGuide AI - 피부과 진료 참고용 요약 리포트</h2>
+                  <div style={{ fontSize: "0.9rem", color: "#334155", marginTop: "0.35rem" }}>
+                    환자명: <strong>{currentUser ? currentUser.name : "게스트"}</strong> · 출력일시:{" "}
+                    <strong>{new Date().toLocaleString("ko-KR")}</strong> · 발생부위: <strong>{bodyPart}</strong> ·
+                    가려움: <strong>{itchScore}/10</strong> · 통증: <strong>{painScore}/10</strong>
+                  </div>
+                </div>
+
+                {/* 진료용 PDF 출력 · 주변 피부과/약국 · 보호자 공유 링크 바 */}
+                <div className="card no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
                   <div>
-                    <strong>👨‍👩‍👧 보호자·가족에게 큰 글씨 안내서 공유</strong>
+                    <strong>🏥 진료 준비 및 가족 공유 도구</strong>
                     <div className="form-hint" style={{ margin: 0 }}>
-                      어르신이나 가족이 보기 편한 큰 글씨 요약 링크(24시간 유효)를 발급합니다.
+                      병원 진료 시 PDF로 출력해 보여주거나, 주변 피부과·약국 및 가족 공유 링크를 이용하세요.
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleCreateShareLink}
-                    style={{
-                      border: "none",
-                      borderRadius: "10px",
-                      padding: "0.6rem 1rem",
-                      background: "#1e293b",
-                      color: "#fff",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                    }}
-                  >
-                    🔗 공유 링크 발급
-                  </button>
+                  <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      onClick={() => window.print()}
+                      style={{
+                        border: "none",
+                        borderRadius: "10px",
+                        padding: "0.6rem 0.95rem",
+                        background: "#0d6efd",
+                        color: "#fff",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                      }}
+                    >
+                      🖨️ 진료용 PDF / 인쇄
+                    </button>
+                    <a
+                      href="https://map.naver.com/p/search/피부과"
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        borderRadius: "10px",
+                        padding: "0.6rem 0.95rem",
+                        background: "#0f766e",
+                        color: "#fff",
+                        fontWeight: 700,
+                        textDecoration: "none",
+                        fontSize: "0.86rem",
+                        display: "inline-flex",
+                        alignItems: "center",
+                      }}
+                    >
+                      🏥 주변 피부과
+                    </a>
+                    <a
+                      href="https://map.naver.com/p/search/약국"
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        borderRadius: "10px",
+                        padding: "0.6rem 0.95rem",
+                        background: "#0369a1",
+                        color: "#fff",
+                        fontWeight: 700,
+                        textDecoration: "none",
+                        fontSize: "0.86rem",
+                        display: "inline-flex",
+                        alignItems: "center",
+                      }}
+                    >
+                      💊 주변 약국
+                    </a>
+                    <button
+                      type="button"
+                      onClick={handleCreateShareLink}
+                      style={{
+                        border: "none",
+                        borderRadius: "10px",
+                        padding: "0.6rem 0.95rem",
+                        background: "#1e293b",
+                        color: "#fff",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                      }}
+                    >
+                      🔗 가족 공유 링크
+                    </button>
+                  </div>
                   {shareLinkInfo && (
                     <div style={{ width: "100%", background: "#f1f5f9", padding: "0.65rem 0.9rem", borderRadius: "8px", fontSize: "0.85rem" }}>
                       ✅ 클립보드에 복사되었습니다! 바로 열어보기:{" "}
@@ -830,7 +893,7 @@ export default function App() {
                           style={{ opacity: heatmapOpacity / 100 }}
                         />
                       </div>
-                      <div style={{ marginTop: "0.6rem" }}>
+                      <div className="no-print" style={{ marginTop: "0.6rem" }}>
                         <label className="form-label">히트맵 투명도 조절: {heatmapOpacity}%</label>
                         <input
                           type="range"

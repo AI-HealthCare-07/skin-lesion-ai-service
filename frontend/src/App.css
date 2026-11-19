@@ -337,3 +337,43 @@ body {
   padding: 4rem 2rem;
   color: #64748b;
 }
+
+/* 병원 진료용 PDF / 인쇄 전용 스타일 */
+.print-only-header {
+  display: none;
+}
+
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .app-header,
+  .no-print,
+  .btn-submit,
+  input[type="range"] {
+    display: none !important;
+  }
+
+  .main-container {
+    display: block !important;
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .card {
+    box-shadow: none !important;
+    border: 1px solid #cbd5e1 !important;
+    break-inside: avoid;
+    margin-bottom: 1rem !important;
+  }
+
+  .print-only-header {
+    display: block !important;
+    border-bottom: 2px solid #0d6efd;
+    padding-bottom: 0.75rem;
+    margin-bottom: 1rem;
+  }
+}
