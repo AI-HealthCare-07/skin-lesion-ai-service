@@ -1,0 +1,13 @@
+@'
+.git
+.venv
+venv
+__pycache__
+*.pyc
+node_modules
+frontend/node_modules
+mysql_data
+qdrant_data
+uploads
+.env
+'@ | Set-Content -Path ".dockerignore" -Encoding UTF8
