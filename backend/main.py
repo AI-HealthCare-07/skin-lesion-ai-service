@@ -17,6 +17,7 @@ from backend import models
 from backend.database import Base, SessionLocal, engine, get_db
 from backend.router import router as predict_router
 from sqlalchemy import Boolean
+from backend import auth
 
 load_dotenv()
 
@@ -374,3 +375,116 @@ def toggle_medication_schedule(schedule_id: int, db: Session = Depends(get_db)):
     item.is_active = not item.is_active
     db.commit()
     return {"schedule_id": item.schedule_id, "is_active": item.is_active}
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    name: str
+    is_pregnant_or_nursing: bool = False
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+# 1. 회원가입 & 즉시 JWT 토큰 발급
+@app.post("/api/v1/auth/register")
+def register_user(payload: RegisterRequest, db: Session = Depends(get_db)):
+    existing = db.query(models.User).filter(models.User.email == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="이미 가입된 이메일 주소입니다.")
+
+    new_user = models.User(
+        email=payload.email,
+        password_hash=auth.hash_password(payload.password),
+        name=payload.name,
+        is_pregnant_or_nursing=payload.is_pregnant_or_nursing,
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    token = auth.create_access_token(new_user.user_id, new_user.email)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "user_id": new_user.user_id,
+            "email": new_user.email,
+            "name": new_user.name,
+            "is_pregnant_or_nursing": new_user.is_pregnant_or_nursing,
+        },
+    }
+
+
+# 2. 로그인 & JWT 토큰 발급
+@app.post("/api/v1/auth/login")
+def login_user(payload: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == payload.email).first()
+    if not user or not auth.verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다.")
+
+    token = auth.create_access_token(user.user_id, user.email)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "user_id": user.user_id,
+            "email": user.email,
+            "name": user.name,
+            "is_pregnant_or_nursing": user.is_pregnant_or_nursing,
+        },
+    }
+
+
+# 3. 현재 로그인된 내 정보 조회
+@app.get("/api/v1/auth/me")
+def read_current_user(current_user: models.User = Depends(auth.get_current_user)):
+    return {
+        "user_id": current_user.user_id,
+        "email": current_user.email,
+        "name": current_user.name,
+        "is_pregnant_or_nursing": current_user.is_pregnant_or_nursing,
+    }
+
+
+# 4. 내 과거 피부 진단 히스토리(경과 추적) 조회
+@app.get("/api/v1/history")
+def get_user_diagnosis_history(user_id: int = 1, db: Session = Depends(get_db)):
+    records = (
+        db.query(models.SkinRecord)
+        .filter(models.SkinRecord.user_id == user_id)
+        .order_by(models.SkinRecord.created_at.desc())
+        .all()
+    )
+
+    history_list = []
+    for rec in records:
+        task = db.query(models.AnalysisTask).filter(models.AnalysisTask.record_id == rec.record_id).first()
+        screening = (
+            db.query(models.ScreeningResult).filter(models.ScreeningResult.task_id == task.task_id).first()
+            if task
+            else None
+        )
+        img = db.query(models.LesionImage).filter(models.LesionImage.record_id == rec.record_id).first()
+
+        history_list.append(
+            {
+                "record_id": rec.record_id,
+                "task_id": task.task_id if task else None,
+                "created_at": rec.created_at.strftime("%Y-%m-%d %H:%M") if rec.created_at else "",
+                "body_part": rec.body_part,
+                "symptoms": rec.symptoms_morphology or [],
+                "itch_score": rec.itch_score,
+                "pain_score": rec.pain_score,
+                "user_memo": rec.user_memo,
+                "primary_disease_name": screening.primary_disease_name if screening else "분석 진행/대기 중",
+                "confidence_score": screening.confidence_score if screening else 0.0,
+                "risk_level": screening.risk_level if screening else "PENDING",
+                "gradcam_image_url": img.gradcam_image_url if img else None,
+            }
+        )
+
+    return history_list
