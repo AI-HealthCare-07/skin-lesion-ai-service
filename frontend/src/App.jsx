@@ -4,6 +4,7 @@ import { speakKoreanText, triggerMedicationAlert } from "./alertHelper";
 import ReportChatBox from "./ReportChatBox";
 import EmergencyTriageBanner from "./EmergencyTriageBanner";
 import PersonalDurBanner from "./PersonalDurBanner";
+import MainWelcomePanel from "./MainWelcomePanel";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -852,12 +853,8 @@ export default function App() {
               </div>
             )}
 
-            {!taskStatus && !report && (
-              <div className="card empty-state">
-                <h3>병변 사진을 업로드하고 분석을 시작하세요</h3>
-                <p>분석이 완료되면 진료용 PDF 출력, 주변 피부과·약국 안내, 보호자용 큰 글씨 공유 링크까지 한 번에 이용할 수 있습니다.</p>
-              </div>
-            )}
+            {!taskStatus && !report && <MainWelcomePanel />}
+              
 
             {report && (
               <>
