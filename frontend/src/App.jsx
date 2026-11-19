@@ -3,6 +3,7 @@ import "./App.css";
 import { speakKoreanText, triggerMedicationAlert } from "./alertHelper";
 import ReportChatBox from "./ReportChatBox";
 import EmergencyTriageBanner from "./EmergencyTriageBanner";
+import PersonalDurBanner from "./PersonalDurBanner";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -24,7 +25,7 @@ export default function App() {
 
   const activeUserId = currentUser ? currentUser.user_id : 1;
 
-  // 문진 폼 & OCR 상태
+  // 문진 폼, OCR 및 개인 맞춤 DUR 상태
   const [bodyPart, setBodyPart] = useState("FACE");
   const [symptoms, setSymptoms] = useState("홍반, 각질, 가려움");
   const [itchScore, setItchScore] = useState(6);
@@ -35,6 +36,8 @@ export default function App() {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrResultText, setOcrResultText] = useState("");
+  const [selectedAllergies, setSelectedAllergies] = useState([]);
+  const [selectedConditions, setSelectedConditions] = useState([]);
 
   // 비동기 진행 및 리포트 상태
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -54,6 +57,10 @@ export default function App() {
 
   const pollTimerRef = useRef(null);
   const lastTriggeredRef = useRef("");
+
+  const toggleSelection = (setList, id) => {
+    setList((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
 
   // 실시간 복약 스케줄 감시 (15초 주기)
   useEffect(() => {
@@ -84,8 +91,14 @@ export default function App() {
       })
         .then((res) => (res.ok ? res.json() : null))
         .then((userData) => {
-          if (userData) setCurrentUser(userData);
-          else localStorage.removeItem("mediguide_token");
+          if (userData) {
+            setCurrentUser(userData);
+            if (userData.is_pregnant_or_nursing) {
+              setSelectedConditions((prev) => (prev.includes("PREGNANT") ? prev : [...prev, "PREGNANT"]));
+            }
+          } else {
+            localStorage.removeItem("mediguide_token");
+          }
         })
         .catch(() => localStorage.removeItem("mediguide_token"));
     }
@@ -164,6 +177,9 @@ export default function App() {
       if (!res.ok) throw new Error(data.detail || "인증 실패");
       localStorage.setItem("mediguide_token", data.access_token);
       setCurrentUser(data.user);
+      if (data.user?.is_pregnant_or_nursing) {
+        setSelectedConditions((prev) => (prev.includes("PREGNANT") ? prev : [...prev, "PREGNANT"]));
+      }
       setShowAuthModal(false);
       setAuthEmail("");
       setAuthPassword("");
@@ -365,15 +381,7 @@ export default function App() {
       {alertBanner && (
         <div
           className="no-print"
-          style={{
-            background: "#0f766e",
-            color: "#fff",
-            padding: "0.85rem 1.25rem",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: "1rem",
-          }}
+          style={{ background: "#0f766e", color: "#fff", padding: "0.85rem 1.25rem", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem" }}
         >
           <div>
             <strong>{alertBanner.title}</strong> ({alertBanner.time}) — {alertBanner.bodyText}
@@ -690,6 +698,65 @@ export default function App() {
                   <label className="form-label">증상 상세 메모</label>
                   <textarea className="form-control" rows="2" value={userMemo} onChange={(e) => setUserMemo(e.target.value)} />
                 </div>
+
+                {/* 개인 약물 알레르기 · 기저질환 맞춤 DUR 검증 선택 */}
+                <div className="form-group">
+                  <label className="form-label">🧬 개인 약물 알레르기 · 기저질환 (맞춤형 DUR 검증)</label>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.45rem" }}>
+                    {[
+                      { id: "STEROID", label: "스테로이드 알레르기" },
+                      { id: "ANTIBIOTIC", label: "항생제연고 알레르기" },
+                      { id: "ANTIHISTAMINE", label: "항히스타민 과민" },
+                    ].map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => toggleSelection(setSelectedAllergies, item.id)}
+                        style={{
+                          border: selectedAllergies.includes(item.id) ? "1.5px solid #d97706" : "1px solid #cbd5e1",
+                          background: selectedAllergies.includes(item.id) ? "#fef3c7" : "#f8fafc",
+                          color: selectedAllergies.includes(item.id) ? "#92400e" : "#475569",
+                          borderRadius: "999px",
+                          padding: "0.25rem 0.65rem",
+                          fontSize: "0.78rem",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {selectedAllergies.includes(item.id) ? "✓ " : "+ "}
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                    {[
+                      { id: "PREGNANT", label: "임신·수유부" },
+                      { id: "ELDERLY_CHILD", label: "소아·고령자" },
+                      { id: "DIABETES", label: "당뇨·면역저하" },
+                      { id: "GLAUCOMA", label: "녹내장·백내장" },
+                    ].map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => toggleSelection(setSelectedConditions, item.id)}
+                        style={{
+                          border: selectedConditions.includes(item.id) ? "1.5px solid #0d6efd" : "1px solid #cbd5e1",
+                          background: selectedConditions.includes(item.id) ? "#dbeafe" : "#f8fafc",
+                          color: selectedConditions.includes(item.id) ? "#1e40af" : "#475569",
+                          borderRadius: "999px",
+                          padding: "0.25rem 0.65rem",
+                          fontSize: "0.78rem",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {selectedConditions.includes(item.id) ? "✓ " : "+ "}
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="form-group">
                   <label className="form-label">실제 병변 사진 파일 첨부</label>
                   <input type="file" className="form-control" accept="image/*" onChange={handleFileChange} />
@@ -830,7 +897,15 @@ export default function App() {
                     </div>
                   )}
                 </div>
-<EmergencyTriageBanner symptoms={symptoms} userMemo={userMemo} painScore={painScore} />
+
+                <EmergencyTriageBanner symptoms={symptoms} userMemo={userMemo} painScore={painScore} />
+                <PersonalDurBanner
+                  medications={medications}
+                  bodyPart={bodyPart}
+                  selectedAllergies={selectedAllergies}
+                  selectedConditions={selectedConditions}
+                />
+
                 {report.guide.dur_warnings?.length > 0 ? (
                   report.guide.dur_warnings.map((w, idx) => (
                     <div key={idx} className="alert-danger">
@@ -924,7 +999,8 @@ export default function App() {
                     </ul>
                   </div>
                 </div>
-                  <ReportChatBox report={report} bodyPart={bodyPart} />
+
+                <ReportChatBox report={report} bodyPart={bodyPart} />
                 <div className="disclaimer-bar">※ {report.disclaimer}</div>
               </>
             )}
