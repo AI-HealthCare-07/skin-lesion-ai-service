@@ -1,28 +1,28 @@
 import { useState, useRef, useEffect } from "react";
 import "./App.css";
+import { speakKoreanText, triggerMedicationAlert } from "./alertHelper";
 
-const API_BASE = "http://127.0.0.1:8000"; // FastAPI 백엔드 서버 주소
+const API_BASE = "http://127.0.0.1:8000";
 
 export default function App() {
-  // URL 파라미터(?share=TOKEN) 확인 -> 보호자 큰 글씨 전용 뷰 모드
   const shareTokenFromUrl = new URLSearchParams(window.location.search).get("share");
   const [sharedData, setSharedData] = useState(null);
   const [shareError, setShareError] = useState(null);
 
-  // JWT 사용자 인증 및 화면 탭 상태
+  // JWT 인증 및 탭 상태
   const [currentUser, setCurrentUser] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authMode, setAuthMode] = useState("login"); // "login" | "register"
+  const [authMode, setAuthMode] = useState("login");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authName, setAuthName] = useState("");
   const [authPregnant, setAuthPregnant] = useState(false);
-  const [activeTab, setActiveTab] = useState("analyze"); // "analyze" | "history"
+  const [activeTab, setActiveTab] = useState("analyze");
   const [historyList, setHistoryList] = useState([]);
 
   const activeUserId = currentUser ? currentUser.user_id : 1;
 
-  // 문진 폼 상태
+  // 문진 폼 & OCR 상태
   const [bodyPart, setBodyPart] = useState("FACE");
   const [symptoms, setSymptoms] = useState("홍반, 각질, 가려움");
   const [itchScore, setItchScore] = useState(6);
@@ -31,6 +31,8 @@ export default function App() {
   const [userMemo, setUserMemo] = useState("볼 주변이 붉어지고 각질이 일어나며 가렵습니다.");
   const [imageFile, setImageFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrResultText, setOcrResultText] = useState("");
 
   // 비동기 진행 및 리포트 상태
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -40,15 +42,38 @@ export default function App() {
   const [heatmapOpacity, setHeatmapOpacity] = useState(65);
   const [shareLinkInfo, setShareLinkInfo] = useState(null);
 
-  // 복약·연고 도포 알림 스케줄러 상태
+  // 복약 스케줄러 & 실시간 푸시·음성 알림 상태
   const [schedules, setSchedules] = useState([]);
   const [schedDrug, setSchedDrug] = useState("리도멕스크림0.15%");
   const [schedNote, setSchedNote] = useState("보습제 15분 후 환부에 2.5 FTU 도포");
   const [schedTime, setSchedTime] = useState("21:00");
+  const [alertBanner, setAlertBanner] = useState(null);
+  const [ttsEnabled, setTtsEnabled] = useState(true);
 
   const pollTimerRef = useRef(null);
+  const lastTriggeredRef = useRef("");
 
-  // 초기 로드 시 저장된 JWT 토큰 확인
+  // 실시간 복약 스케줄 감시 (15초 주기)
+  useEffect(() => {
+    if (shareTokenFromUrl) return;
+    const timer = setInterval(() => {
+      const now = new Date();
+      const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      schedules.forEach(async (item) => {
+        if (item.is_active && item.alarm_time === hhmm) {
+          const key = `${item.schedule_id}_${hhmm}`;
+          if (lastTriggeredRef.current !== key) {
+            lastTriggeredRef.current = key;
+            const info = await triggerMedicationAlert(item.drug_name, item.dosage_note, ttsEnabled);
+            setAlertBanner(info);
+          }
+        }
+      });
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [schedules, ttsEnabled, shareTokenFromUrl]);
+
+  // 초기 JWT 토큰 검증
   useEffect(() => {
     const savedToken = localStorage.getItem("mediguide_token");
     if (savedToken) {
@@ -77,7 +102,6 @@ export default function App() {
       loadSchedules(activeUserId);
       loadHistory(activeUserId);
     }
-
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
@@ -88,7 +112,7 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/v1/schedules?user_id=${uid}`);
       if (res.ok) setSchedules(await res.json());
     } catch (err) {
-      console.error("Schedule load error:", err);
+      console.error(err);
     }
   };
 
@@ -97,7 +121,27 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/v1/history?user_id=${uid}`);
       if (res.ok) setHistoryList(await res.json());
     } catch (err) {
-      console.error("History load error:", err);
+      console.error(err);
+    }
+  };
+
+  const handlePrescriptionOcr = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setOcrLoading(true);
+    setOcrResultText("");
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ocr/prescription`, { method: "POST", body: formData });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "OCR 인식 실패");
+      setMedications(data.formatted_medications);
+      setOcrResultText(`인식 완료: ${data.formatted_medications}`);
+    } catch (err) {
+      alert("처방전 OCR 오류: " + err.message);
+    } finally {
+      setOcrLoading(false);
     }
   };
 
@@ -107,13 +151,7 @@ export default function App() {
     const body =
       authMode === "login"
         ? { email: authEmail, password: authPassword }
-        : {
-            email: authEmail,
-            password: authPassword,
-            name: authName,
-            is_pregnant_or_nursing: authPregnant,
-          };
-
+        : { email: authEmail, password: authPassword, name: authName, is_pregnant_or_nursing: authPregnant };
     try {
       const res = await fetch(`${API_BASE}${endpoint}`, {
         method: "POST",
@@ -121,8 +159,7 @@ export default function App() {
         body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "인증에 실패했습니다.");
-
+      if (!res.ok) throw new Error(data.detail || "인증 실패");
       localStorage.setItem("mediguide_token", data.access_token);
       setCurrentUser(data.user);
       setShowAuthModal(false);
@@ -166,28 +203,20 @@ export default function App() {
 
   const handleAddSchedule = async (e) => {
     e.preventDefault();
+    if ("Notification" in window && Notification.permission === "default") {
+      await Notification.requestPermission();
+    }
     const res = await fetch(`${API_BASE}/api/v1/schedules`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: activeUserId,
-        drug_name: schedDrug,
-        dosage_note: schedNote,
-        alarm_time: schedTime,
-      }),
+      body: JSON.stringify({ user_id: activeUserId, drug_name: schedDrug, dosage_note: schedNote, alarm_time: schedTime }),
     });
-    if (res.ok) {
-      await loadSchedules(activeUserId);
-    }
+    if (res.ok) await loadSchedules(activeUserId);
   };
 
   const handleToggleSchedule = async (scheduleId) => {
-    const res = await fetch(`${API_BASE}/api/v1/schedules/${scheduleId}/toggle`, {
-      method: "PATCH",
-    });
-    if (res.ok) {
-      await loadSchedules(activeUserId);
-    }
+    const res = await fetch(`${API_BASE}/api/v1/schedules/${scheduleId}/toggle`, { method: "PATCH" });
+    if (res.ok) await loadSchedules(activeUserId);
   };
 
   const handleCreateShareLink = async () => {
@@ -226,18 +255,12 @@ export default function App() {
     formData.append("pain_score", painScore);
     formData.append("user_memo", userMemo);
     formData.append("current_medications", medications);
-    if (imageFile) {
-      formData.append("image", imageFile);
-    }
+    if (imageFile) formData.append("image", imageFile);
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/records`, {
-        method: "POST",
-        body: formData,
-      });
+      const res = await fetch(`${API_BASE}/api/v1/records`, { method: "POST", body: formData });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "분석 요청 실패");
-
       setCurrentTaskId(data.task_id);
       startPolling(data.task_id);
     } catch (err) {
@@ -248,13 +271,11 @@ export default function App() {
 
   const startPolling = (taskId) => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-
     pollTimerRef.current = setInterval(async () => {
       try {
         const res = await fetch(`${API_BASE}/api/v1/tasks/${taskId}`);
         const statusData = await res.json();
         setTaskStatus(statusData);
-
         if (statusData.status === "COMPLETED") {
           clearInterval(pollTimerRef.current);
           const repRes = await fetch(`${API_BASE}/api/v1/reports/${taskId}`);
@@ -267,26 +288,40 @@ export default function App() {
           setIsSubmitting(false);
         }
       } catch (err) {
-        console.error("Polling error:", err);
+        console.error(err);
       }
     }, 1000);
   };
 
-  const resolveImageUrl = (rawPath) => {
-    if (!rawPath) return "";
-    return `${API_BASE}/${rawPath.replace(/\\/g, "/")}`;
-  };
+  const resolveImageUrl = (rawPath) => (rawPath ? `${API_BASE}/${rawPath.replace(/\\/g, "/")}` : "");
 
-  // [보호자·가족 전용 큰 글씨 요약 뷰]
+  const chronologicalHistory = [...historyList].reverse().slice(-7);
+  const oldestRecord = chronologicalHistory.length >= 2 ? chronologicalHistory[0] : null;
+  const latestRecord = chronologicalHistory.length >= 2 ? chronologicalHistory[chronologicalHistory.length - 1] : null;
+
+  // [보호자·가족 전용 큰 글씨 뷰 + TTS]
   if (shareTokenFromUrl) {
     return (
       <div style={{ maxWidth: "780px", margin: "2rem auto", padding: "0 1.25rem", fontSize: "1.2rem", lineHeight: 1.7 }}>
         <div className="card" style={{ borderTop: "8px solid #0d6efd", padding: "2rem" }}>
-          <h1 style={{ fontSize: "1.8rem", marginTop: 0, color: "#0a4296" }}>
-            👨‍👩‍👧 가족·보호자용 큰 글씨 복약 안내서
-          </h1>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.75rem", marginBottom: "1rem" }}>
+            <h1 style={{ fontSize: "1.8rem", margin: 0, color: "#0a4296" }}>👨‍👩‍👧 가족·보호자용 큰 글씨 복약 안내서</h1>
+            {sharedData && (
+              <button
+                type="button"
+                onClick={() =>
+                  speakKoreanText(
+                    `가족 보호자용 복약 안내서입니다. 예상 피부 소견은 ${sharedData.primary_disease_name}이며, 연고 권장 도포량은 ${sharedData.ftu_dosage_guide?.instruction || ""} 입니다.`
+                  )
+                }
+                style={{ border: "none", borderRadius: "10px", padding: "0.65rem 1.1rem", background: "#0f766e", color: "#fff", fontWeight: 700, cursor: "pointer" }}
+              >
+                🔊 안내서 음성으로 듣기
+              </button>
+            )}
+          </div>
           {shareError ? (
-            <div className="alert-danger" style={{ fontSize: "1.15rem" }}>⚠️ {shareError}</div>
+            <div className="alert-danger">⚠️ {shareError}</div>
           ) : !sharedData ? (
             <p>안내서를 불러오는 중입니다...</p>
           ) : (
@@ -296,27 +331,23 @@ export default function App() {
                 <strong style={{ fontSize: "1.6rem", color: "#0d6efd" }}>{sharedData.primary_disease_name}</strong>
                 <p style={{ margin: "0.5rem 0 0 0" }}>{sharedData.visual_finding_summary}</p>
               </div>
-
               {sharedData.dur_warnings?.map((w, idx) => (
-                <div key={idx} className="alert-danger" style={{ fontSize: "1.18rem" }}>
+                <div key={idx} className="alert-danger">
                   <strong>🚨 꼭 주의하세요 ({w.drug_name})</strong>
                   <div>{w.message}</div>
                 </div>
               ))}
-
-              <div className="ftu-box" style={{ fontSize: "1.18rem" }}>
+              <div className="ftu-box">
                 <strong>📏 연고 바르는 양 ({sharedData.ftu_dosage_guide?.body_part_label})</strong>
                 <div>{sharedData.ftu_dosage_guide?.instruction}</div>
               </div>
-
-              <h3 style={{ fontSize: "1.35rem" }}>💊 처방 의약품 주의사항</h3>
+              <h3>💊 처방 의약품 주의사항</h3>
               {sharedData.medication_guide?.map((m, idx) => (
-                <div key={idx} className="med-item" style={{ fontSize: "1.12rem" }}>
+                <div key={idx} className="med-item">
                   <strong>{m.drug_name}</strong>
                   <p style={{ margin: "0.4rem 0 0 0" }}>{m.guidance_summary}</p>
                 </div>
               ))}
-
               <a href="/" className="btn-submit" style={{ display: "block", textAlign: "center", textDecoration: "none", marginTop: "1.5rem" }}>
                 ← 일반 서비스 화면으로 돌아가기
               </a>
@@ -329,13 +360,40 @@ export default function App() {
 
   return (
     <div>
+      {alertBanner && (
+        <div
+          className="no-print"
+          style={{
+            background: "#0f766e",
+            color: "#fff",
+            padding: "0.85rem 1.25rem",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: "1rem",
+          }}
+        >
+          <div>
+            <strong>{alertBanner.title}</strong> ({alertBanner.time}) — {alertBanner.bodyText}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              window.speechSynthesis?.cancel();
+              setAlertBanner(null);
+            }}
+            style={{ border: "none", borderRadius: "8px", padding: "0.35rem 0.75rem", background: "#fff", color: "#0f766e", fontWeight: 700, cursor: "pointer" }}
+          >
+            확인 완료
+          </button>
+        </div>
+      )}
+
       <header className="app-header">
         <div className="header-inner">
           <div>
             <h1 className="header-title">🩺 MediGuide AI</h1>
-            <p className="header-sub">
-              설명 가능한(XAI) 피부 병변 스크리닝 & 식약처 DUR 기반 맞춤형 복약 가이드
-            </p>
+            <p className="header-sub">설명 가능한(XAI) 피부 병변 스크리닝 & 식약처 DUR 기반 맞춤형 복약 가이드</p>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
             <button
@@ -347,8 +405,8 @@ export default function App() {
                 padding: "0.4rem 0.95rem",
                 fontWeight: 700,
                 cursor: "pointer",
-                background: activeTab === "analyze" ? "#ffffff" : "rgba(255,255,255,0.18)",
-                color: activeTab === "analyze" ? "#0a4296" : "#ffffff",
+                background: activeTab === "analyze" ? "#fff" : "rgba(255,255,255,0.18)",
+                color: activeTab === "analyze" ? "#0a4296" : "#fff",
               }}
             >
               🔬 신규 AI 분석
@@ -365,28 +423,19 @@ export default function App() {
                 padding: "0.4rem 0.95rem",
                 fontWeight: 700,
                 cursor: "pointer",
-                background: activeTab === "history" ? "#ffffff" : "rgba(255,255,255,0.18)",
-                color: activeTab === "history" ? "#0a4296" : "#ffffff",
+                background: activeTab === "history" ? "#fff" : "rgba(255,255,255,0.18)",
+                color: activeTab === "history" ? "#0a4296" : "#fff",
               }}
             >
               📜 내 진단 히스토리 ({historyList.length})
             </button>
-
             {currentUser ? (
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <span className="version-badge">👤 {currentUser.name}님</span>
                 <button
                   type="button"
                   onClick={handleLogout}
-                  style={{
-                    border: "1px solid rgba(255,255,255,0.45)",
-                    borderRadius: "999px",
-                    padding: "0.35rem 0.8rem",
-                    background: "transparent",
-                    color: "#fff",
-                    cursor: "pointer",
-                    fontSize: "0.8rem",
-                  }}
+                  style={{ border: "1px solid rgba(255,255,255,0.45)", borderRadius: "999px", padding: "0.35rem 0.8rem", background: "transparent", color: "#fff", cursor: "pointer", fontSize: "0.8rem" }}
                 >
                   로그아웃
                 </button>
@@ -408,107 +457,52 @@ export default function App() {
         </div>
       </header>
 
-      {/* 로그인 / 회원가입 모달 */}
       {showAuthModal && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(15, 23, 42, 0.55)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-            padding: "1rem",
-          }}
-        >
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "1rem" }}>
           <div className="card" style={{ width: "100%", maxWidth: "420px", margin: 0 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-              <h2 className="card-title" style={{ margin: 0 }}>
-                {authMode === "login" ? "🔐 MediGuide AI 로그인" : "📝 새 계정 회원가입"}
-              </h2>
-              <button
-                type="button"
-                onClick={() => setShowAuthModal(false)}
-                style={{ border: "none", background: "transparent", fontSize: "1.2rem", cursor: "pointer" }}
-              >
+              <h2 className="card-title" style={{ margin: 0 }}>{authMode === "login" ? "🔐 MediGuide AI 로그인" : "📝 새 계정 회원가입"}</h2>
+              <button type="button" onClick={() => setShowAuthModal(false)} style={{ border: "none", background: "transparent", fontSize: "1.2rem", cursor: "pointer" }}>
                 ✕
               </button>
             </div>
-
             <form onSubmit={handleAuthSubmit}>
               {authMode === "register" && (
                 <div className="form-group">
                   <label className="form-label">이름 (닉네임)</label>
-                  <input
-                    type="text"
-                    className="form-control"
-                    placeholder="홍길동"
-                    value={authName}
-                    onChange={(e) => setAuthName(e.target.value)}
-                    required
-                  />
+                  <input type="text" className="form-control" value={authName} onChange={(e) => setAuthName(e.target.value)} required />
                 </div>
               )}
               <div className="form-group">
                 <label className="form-label">이메일</label>
-                <input
-                  type="email"
-                  className="form-control"
-                  placeholder="user@example.com"
-                  value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)}
-                  required
-                />
+                <input type="email" className="form-control" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} required />
               </div>
               <div className="form-group">
                 <label className="form-label">비밀번호</label>
-                <input
-                  type="password"
-                  className="form-control"
-                  placeholder="••••••••"
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  required
-                />
+                <input type="password" className="form-control" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} required />
               </div>
               {authMode === "register" && (
                 <div className="form-group">
                   <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.88rem", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={authPregnant}
-                      onChange={(e) => setAuthPregnant(e.target.checked)}
-                    />
+                    <input type="checkbox" checked={authPregnant} onChange={(e) => setAuthPregnant(e.target.checked)} />
                     임신부 또는 수유부입니다 (DUR 안전 경고 강화)
                   </label>
                 </div>
               )}
-              <button type="submit" className="btn-submit">
-                {authMode === "login" ? "로그인하기" : "가입 완료 및 시작하기"}
-              </button>
+              <button type="submit" className="btn-submit">{authMode === "login" ? "로그인하기" : "가입 완료 및 시작하기"}</button>
             </form>
-
             <div style={{ textAlign: "center", marginTop: "0.9rem", fontSize: "0.85rem" }}>
               {authMode === "login" ? (
                 <>
                   아직 계정이 없으신가요?{" "}
-                  <button
-                    type="button"
-                    onClick={() => setAuthMode("register")}
-                    style={{ border: "none", background: "none", color: "#0d6efd", fontWeight: 700, cursor: "pointer" }}
-                  >
+                  <button type="button" onClick={() => setAuthMode("register")} style={{ border: "none", background: "none", color: "#0d6efd", fontWeight: 700, cursor: "pointer" }}>
                     회원가입
                   </button>
                 </>
               ) : (
                 <>
                   이미 계정이 있으신가요?{" "}
-                  <button
-                    type="button"
-                    onClick={() => setAuthMode("login")}
-                    style={{ border: "none", background: "none", color: "#0d6efd", fontWeight: 700, cursor: "pointer" }}
-                  >
+                  <button type="button" onClick={() => setAuthMode("login")} style={{ border: "none", background: "none", color: "#0d6efd", fontWeight: 700, cursor: "pointer" }}>
                     로그인
                   </button>
                 </>
@@ -518,29 +512,96 @@ export default function App() {
         </div>
       )}
 
-      {/* 탭 2: 과거 진단 히스토리(경과 추적) 화면 */}
       {activeTab === "history" ? (
         <div style={{ maxWidth: "1020px", margin: "1.5rem auto", padding: "0 1.25rem" }}>
+          {chronologicalHistory.length >= 2 && (
+            <div className="card" style={{ marginBottom: "1.25rem" }}>
+              <h2 className="card-title">📈 증상 호전도 추이 그래프 & 전·후 병변 비교</h2>
+              <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: "1.25rem", alignItems: "center" }}>
+                <div style={{ background: "#f8fafc", padding: "1rem", borderRadius: "12px", border: "1px solid #e2e8f0" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.84rem", marginBottom: "0.5rem" }}>
+                    <strong>가려움 · 통증 지수 변화 (0~10점)</strong>
+                    <span>
+                      <span style={{ color: "#ef4444", fontWeight: 700 }}>● 가려움</span>{" "}
+                      <span style={{ color: "#0d6efd", fontWeight: 700 }}>● 통증</span>
+                    </span>
+                  </div>
+                  <svg viewBox="0 0 360 150" style={{ width: "100%", height: "150px", overflow: "visible" }}>
+                    {[0, 5, 10].map((val) => {
+                      const y = 120 - val * 10;
+                      return (
+                        <g key={val}>
+                          <line x1="25" y1={y} x2="340" y2={y} stroke="#cbd5e1" strokeDasharray="3 3" />
+                          <text x="5" y={y + 4} fontSize="10" fill="#64748b">{val}</text>
+                        </g>
+                      );
+                    })}
+                    <polyline
+                      fill="none"
+                      stroke="#ef4444"
+                      strokeWidth="2.5"
+                      points={chronologicalHistory
+                        .map((item, i) => `${35 + (i * 290) / Math.max(1, chronologicalHistory.length - 1)},${120 - item.itch_score * 10}`)
+                        .join(" ")}
+                    />
+                    <polyline
+                      fill="none"
+                      stroke="#0d6efd"
+                      strokeWidth="2.5"
+                      points={chronologicalHistory
+                        .map((item, i) => `${35 + (i * 290) / Math.max(1, chronologicalHistory.length - 1)},${120 - item.pain_score * 10}`)
+                        .join(" ")}
+                    />
+                    {chronologicalHistory.map((item, i) => {
+                      const x = 35 + (i * 290) / Math.max(1, chronologicalHistory.length - 1);
+                      return (
+                        <g key={item.record_id}>
+                          <circle cx={x} cy={120 - item.itch_score * 10} r="4" fill="#ef4444" />
+                          <circle cx={x} cy={120 - item.pain_score * 10} r="4" fill="#0d6efd" />
+                          <text x={x} y="142" fontSize="9" textAnchor="middle" fill="#475569">{item.created_at.slice(5, 10)}</text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </div>
+
+                <div style={{ background: "#f8fafc", padding: "1rem", borderRadius: "12px", border: "1px solid #e2e8f0" }}>
+                  <strong style={{ fontSize: "0.88rem", display: "block", marginBottom: "0.6rem" }}>🔍 초기 기록 vs 최근 기록 전·후 비교</strong>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.7rem", textAlign: "center" }}>
+                    <div>
+                      <div style={{ fontSize: "0.75rem", color: "#64748b", marginBottom: "0.25rem" }}>이전 ({oldestRecord.created_at.slice(5, 10)})</div>
+                      {oldestRecord.gradcam_image_url && (
+                        <img src={resolveImageUrl(oldestRecord.gradcam_image_url)} alt="이전" style={{ width: "100%", height: "95px", objectFit: "cover", borderRadius: "8px" }} />
+                      )}
+                      <div style={{ fontSize: "0.78rem", marginTop: "0.3rem" }}>
+                        가려움 <strong>{oldestRecord.itch_score}</strong> · 통증 <strong>{oldestRecord.pain_score}</strong>
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "0.75rem", color: "#0d6efd", fontWeight: 700, marginBottom: "0.25rem" }}>최근 ({latestRecord.created_at.slice(5, 10)})</div>
+                      {latestRecord.gradcam_image_url && (
+                        <img src={resolveImageUrl(latestRecord.gradcam_image_url)} alt="최근" style={{ width: "100%", height: "95px", objectFit: "cover", borderRadius: "8px", border: "2px solid #0d6efd" }} />
+                      )}
+                      <div style={{ fontSize: "0.78rem", marginTop: "0.3rem" }}>
+                        가려움 <strong>{latestRecord.itch_score}</strong> · 통증 <strong>{latestRecord.pain_score}</strong>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="card">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
               <div>
-                <h2 className="card-title" style={{ margin: 0 }}>
-                  📜 {currentUser ? `${currentUser.name}님의` : "게스트"} 피부 진단 및 경과 추적 히스토리
-                </h2>
-                <div className="form-hint" style={{ margin: "0.3rem 0 0 0" }}>
-                  과거 분석 카드를 클릭하면 당시의 Grad-CAM 히트맵과 복약 가이드를 다시 확인할 수 있습니다.
-                </div>
+                <h2 className="card-title" style={{ margin: 0 }}>📜 {currentUser ? `${currentUser.name}님의` : "게스트"} 피부 진단 및 경과 추적 히스토리</h2>
+                <div className="form-hint" style={{ margin: "0.3rem 0 0 0" }}>과거 분석 카드를 클릭하면 당시의 Grad-CAM 히트맵과 복약 가이드를 다시 확인할 수 있습니다.</div>
               </div>
-              <button
-                type="button"
-                onClick={() => setActiveTab("analyze")}
-                className="btn-submit"
-                style={{ width: "auto", padding: "0.55rem 1rem" }}
-              >
+              <button type="button" onClick={() => setActiveTab("analyze")} className="btn-submit" style={{ width: "auto", padding: "0.55rem 1rem" }}>
                 + 새 병변 분석하기
               </button>
             </div>
-
             {historyList.length === 0 ? (
               <div className="empty-state">
                 <h3>아직 저장된 진단 기록이 없습니다</h3>
@@ -553,53 +614,24 @@ export default function App() {
                     key={item.record_id}
                     onClick={() => handleSelectHistoryItem(item)}
                     className="med-item"
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      gap: "1rem",
-                      cursor: "pointer",
-                      flexWrap: "wrap",
-                    }}
+                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", cursor: "pointer", flexWrap: "wrap" }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
                       {item.gradcam_image_url ? (
-                        <img
-                          src={resolveImageUrl(item.gradcam_image_url)}
-                          alt="히트맵 썸네일"
-                          style={{ width: "68px", height: "68px", borderRadius: "10px", objectFit: "cover", border: "1px solid #cbd5e1" }}
-                        />
+                        <img src={resolveImageUrl(item.gradcam_image_url)} alt="히트맵" style={{ width: "68px", height: "68px", borderRadius: "10px", objectFit: "cover", border: "1px solid #cbd5e1" }} />
                       ) : (
-                        <div
-                          style={{
-                            width: "68px",
-                            height: "68px",
-                            borderRadius: "10px",
-                            background: "#e2e8f0",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            fontSize: "0.75rem",
-                            color: "#64748b",
-                          }}
-                        >
+                        <div style={{ width: "68px", height: "68px", borderRadius: "10px", background: "#e2e8f0", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.75rem", color: "#64748b" }}>
                           이미지 없음
                         </div>
                       )}
                       <div>
-                        <div style={{ fontSize: "0.82rem", color: "#64748b" }}>
-                          🕒 {item.created_at} · 부위: <strong>{item.body_part}</strong>
-                        </div>
-                        <strong style={{ fontSize: "1.08rem", color: "#0d6efd" }}>
-                          {item.primary_disease_name} ({(item.confidence_score * 100).toFixed(1)}%)
-                        </strong>
+                        <div style={{ fontSize: "0.82rem", color: "#64748b" }}>🕒 {item.created_at} · 부위: <strong>{item.body_part}</strong></div>
+                        <strong style={{ fontSize: "1.08rem", color: "#0d6efd" }}>{item.primary_disease_name} ({(item.confidence_score * 100).toFixed(1)}%)</strong>
                         <div style={{ fontSize: "0.85rem", color: "#334155", marginTop: "0.2rem" }}>
-                          가려움: <strong>{item.itch_score}/10</strong> · 통증: <strong>{item.pain_score}/10</strong> · 증상:{" "}
-                          {item.symptoms.join(", ")}
+                          가려움: <strong>{item.itch_score}/10</strong> · 통증: <strong>{item.pain_score}/10</strong> · 증상: {item.symptoms.join(", ")}
                         </div>
                       </div>
                     </div>
-
                     <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
                       <span className="status-pill">{item.risk_level}</span>
                       <span style={{ color: "#0d6efd", fontWeight: 700, fontSize: "0.88rem" }}>리포트 보기 →</span>
@@ -612,7 +644,6 @@ export default function App() {
         </div>
       ) : (
         <main className="main-container">
-          {/* 좌측: 문진 업로드 + 복약·연고 도포 알림 스케줄러 (인쇄 시 자동 숨김) */}
           <div className="no-print">
             <section className="card">
               <h2 className="card-title">1. 피부 병변 문진 및 사진 업로드</h2>
@@ -628,12 +659,10 @@ export default function App() {
                     <option value="LEG">다리 (LEG)</option>
                   </select>
                 </div>
-
                 <div className="form-group">
                   <label className="form-label">주요 자각 증상 (쉼표 구분)</label>
                   <input type="text" className="form-control" value={symptoms} onChange={(e) => setSymptoms(e.target.value)} required />
                 </div>
-
                 <div className="form-group slider-row">
                   <div>
                     <label className="form-label">가려움 지수: {itchScore}/10</label>
@@ -644,17 +673,21 @@ export default function App() {
                     <input type="range" min="0" max="10" value={painScore} onChange={(e) => setPainScore(Number(e.target.value))} style={{ width: "100%" }} />
                   </div>
                 </div>
-
                 <div className="form-group">
-                  <label className="form-label">처방/보유 의약품 (DUR 검증용)</label>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
+                    <label className="form-label" style={{ margin: 0 }}>처방/보유 의약품 (DUR 검증용)</label>
+                    <label style={{ fontSize: "0.78rem", background: "#eff6ff", color: "#0d6efd", border: "1px solid #bfdbfe", padding: "0.25rem 0.6rem", borderRadius: "6px", fontWeight: 700, cursor: "pointer" }}>
+                      {ocrLoading ? "⏳ OCR 스캔 중..." : "📄 약봉투/처방전 OCR 자동입력"}
+                      <input type="file" accept="image/*" onChange={handlePrescriptionOcr} style={{ display: "none" }} />
+                    </label>
+                  </div>
                   <input type="text" className="form-control" value={medications} onChange={(e) => setMedications(e.target.value)} />
+                  {ocrResultText && <div style={{ fontSize: "0.78rem", color: "#15803d", marginTop: "0.3rem", fontWeight: 600 }}>✅ {ocrResultText}</div>}
                 </div>
-
                 <div className="form-group">
                   <label className="form-label">증상 상세 메모</label>
                   <textarea className="form-control" rows="2" value={userMemo} onChange={(e) => setUserMemo(e.target.value)} />
                 </div>
-
                 <div className="form-group">
                   <label className="form-label">실제 병변 사진 파일 첨부</label>
                   <input type="file" className="form-control" accept="image/*" onChange={handleFileChange} />
@@ -664,81 +697,78 @@ export default function App() {
                     </div>
                   )}
                 </div>
-
                 <button type="submit" className="btn-submit" disabled={isSubmitting}>
                   {isSubmitting ? "⏳ AI 파이프라인 분석 진행 중..." : "🔍 AI 스크리닝 및 복약 가이드 분석 시작"}
                 </button>
               </form>
             </section>
 
-            {/* 복약·연고 도포 알림 스케줄러 카드 */}
+            {/* 복약·연고 도포 알림 스케줄러 + 실시간 푸시/음성 */}
             <section className="card">
-              <h2 className="card-title">⏰ 복약 · 연고 도포 알림 스케줄러</h2>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem", flexWrap: "wrap", gap: "0.4rem" }}>
+                <h2 className="card-title" style={{ margin: 0 }}>⏰ 복약 · 도포 알림 스케줄러</h2>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  <button
+                    type="button"
+                    onClick={() => setTtsEnabled((prev) => !prev)}
+                    style={{ border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.28rem 0.55rem", fontSize: "0.76rem", fontWeight: 700, background: ttsEnabled ? "#ecfdf5" : "#f1f5f9", color: ttsEnabled ? "#047857" : "#64748b", cursor: "pointer" }}
+                  >
+                    {ttsEnabled ? "🔊 음성 ON" : "🔇 음성 OFF"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const target = schedules.find((s) => s.is_active) || { drug_name: schedDrug, dosage_note: schedNote };
+                      const info = await triggerMedicationAlert(target.drug_name, target.dosage_note, ttsEnabled);
+                      setAlertBanner(info);
+                    }}
+                    style={{ border: "none", borderRadius: "8px", padding: "0.3rem 0.6rem", fontSize: "0.76rem", fontWeight: 700, background: "#0d6efd", color: "#fff", cursor: "pointer" }}
+                  >
+                    🔔 알림·음성 테스트
+                  </button>
+                </div>
+              </div>
+
               <form onSubmit={handleAddSchedule} style={{ display: "grid", gap: "0.6rem", marginBottom: "1rem" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 110px", gap: "0.5rem" }}>
-                  <input
-                    type="text"
-                    className="form-control"
-                    placeholder="의약품명"
-                    value={schedDrug}
-                    onChange={(e) => setSchedDrug(e.target.value)}
-                    required
-                  />
-                  <input
-                    type="time"
-                    className="form-control"
-                    value={schedTime}
-                    onChange={(e) => setSchedTime(e.target.value)}
-                    required
-                  />
+                  <input type="text" className="form-control" placeholder="의약품명" value={schedDrug} onChange={(e) => setSchedDrug(e.target.value)} required />
+                  <input type="time" className="form-control" value={schedTime} onChange={(e) => setSchedTime(e.target.value)} required />
                 </div>
-                <input
-                  type="text"
-                  className="form-control"
-                  placeholder="도포/복용 메모 (예: 보습제 15분 후 얇게 도포)"
-                  value={schedNote}
-                  onChange={(e) => setSchedNote(e.target.value)}
-                />
-                <button type="submit" className="btn-submit" style={{ background: "#0f766e", padding: "0.6rem" }}>
-                  + 알림 스케줄 추가
-                </button>
+                <input type="text" className="form-control" placeholder="도포/복용 메모" value={schedNote} onChange={(e) => setSchedNote(e.target.value)} />
+                <button type="submit" className="btn-submit" style={{ background: "#0f766e", padding: "0.6rem" }}>+ 알림 스케줄 추가</button>
               </form>
 
               {schedules.length === 0 ? (
                 <div className="form-hint">등록된 복약 알림이 없습니다.</div>
               ) : (
                 schedules.map((s) => (
-                  <div
-                    key={s.schedule_id}
-                    className="med-item"
-                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center", opacity: s.is_active ? 1 : 0.55 }}
-                  >
+                  <div key={s.schedule_id} className="med-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", opacity: s.is_active ? 1 : 0.55 }}>
                     <div>
                       <strong style={{ color: "#0d6efd" }}>{s.alarm_time}</strong> · <strong>{s.drug_name}</strong>
                       <div className="form-hint" style={{ margin: 0 }}>{s.dosage_note}</div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleToggleSchedule(s.schedule_id)}
-                      style={{
-                        border: "none",
-                        borderRadius: "8px",
-                        padding: "0.35rem 0.65rem",
-                        cursor: "pointer",
-                        fontWeight: 700,
-                        background: s.is_active ? "#dcfce7" : "#e2e8f0",
-                        color: s.is_active ? "#166534" : "#475569",
-                      }}
-                    >
-                      {s.is_active ? "ON" : "OFF"}
-                    </button>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                      <button
+                        type="button"
+                        onClick={() => speakKoreanText(`${s.alarm_time} 알림. ${s.drug_name}. ${s.dosage_note}`)}
+                        style={{ border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.3rem 0.5rem", background: "#fff", cursor: "pointer", fontSize: "0.82rem" }}
+                      >
+                        🔊
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSchedule(s.schedule_id)}
+                        style={{ border: "none", borderRadius: "8px", padding: "0.35rem 0.65rem", cursor: "pointer", fontWeight: 700, background: s.is_active ? "#dcfce7" : "#e2e8f0", color: s.is_active ? "#166534" : "#475569" }}
+                      >
+                        {s.is_active ? "ON" : "OFF"}
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
             </section>
           </div>
 
-          {/* 우측: 진행 상태 및 통합 분석 리포트 */}
           <section>
             {taskStatus && (
               <div className="card no-print">
@@ -747,9 +777,7 @@ export default function App() {
                   <span className="status-pill">{taskStatus.status}</span>
                 </div>
                 <div className="progress-track">
-                  <div className="progress-fill" style={{ width: `${taskStatus.progress_percent}%` }}>
-                    {taskStatus.progress_percent}%
-                  </div>
+                  <div className="progress-fill" style={{ width: `${taskStatus.progress_percent}%` }}>{taskStatus.progress_percent}%</div>
                 </div>
                 <div className="form-hint">{taskStatus.message}</div>
               </div>
@@ -758,97 +786,36 @@ export default function App() {
             {!taskStatus && !report && (
               <div className="card empty-state">
                 <h3>병변 사진을 업로드하고 분석을 시작하세요</h3>
-                <p>
-                  분석이 완료되면 진료용 PDF 출력, 주변 피부과·약국 안내, 보호자용 큰 글씨 공유 링크까지 한 번에 이용할 수 있습니다.
-                </p>
+                <p>분석이 완료되면 진료용 PDF 출력, 주변 피부과·약국 안내, 보호자용 큰 글씨 공유 링크까지 한 번에 이용할 수 있습니다.</p>
               </div>
             )}
 
             {report && (
               <>
-                {/* 인쇄 / PDF 저장 시에만 표시되는 진료 참고용 요약 헤더 */}
                 <div className="print-only-header">
                   <h2 style={{ margin: 0, color: "#0a4296" }}>🩺 MediGuide AI - 피부과 진료 참고용 요약 리포트</h2>
                   <div style={{ fontSize: "0.9rem", color: "#334155", marginTop: "0.35rem" }}>
-                    환자명: <strong>{currentUser ? currentUser.name : "게스트"}</strong> · 출력일시:{" "}
-                    <strong>{new Date().toLocaleString("ko-KR")}</strong> · 발생부위: <strong>{bodyPart}</strong> ·
-                    가려움: <strong>{itchScore}/10</strong> · 통증: <strong>{painScore}/10</strong>
+                    환자명: <strong>{currentUser ? currentUser.name : "게스트"}</strong> · 출력일시: <strong>{new Date().toLocaleString("ko-KR")}</strong> · 발생부위:{" "}
+                    <strong>{bodyPart}</strong> · 가려움: <strong>{itchScore}/10</strong> · 통증: <strong>{painScore}/10</strong>
                   </div>
                 </div>
 
-                {/* 진료용 PDF 출력 · 주변 피부과/약국 · 보호자 공유 링크 바 */}
                 <div className="card no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
                   <div>
                     <strong>🏥 진료 준비 및 가족 공유 도구</strong>
-                    <div className="form-hint" style={{ margin: 0 }}>
-                      병원 진료 시 PDF로 출력해 보여주거나, 주변 피부과·약국 및 가족 공유 링크를 이용하세요.
-                    </div>
+                    <div className="form-hint" style={{ margin: 0 }}>병원 진료 시 PDF로 출력해 보여주거나, 주변 피부과·약국 및 가족 공유 링크를 이용하세요.</div>
                   </div>
                   <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                    <button
-                      type="button"
-                      onClick={() => window.print()}
-                      style={{
-                        border: "none",
-                        borderRadius: "10px",
-                        padding: "0.6rem 0.95rem",
-                        background: "#0d6efd",
-                        color: "#fff",
-                        fontWeight: 700,
-                        cursor: "pointer",
-                      }}
-                    >
+                    <button type="button" onClick={() => window.print()} style={{ border: "none", borderRadius: "10px", padding: "0.6rem 0.95rem", background: "#0d6efd", color: "#fff", fontWeight: 700, cursor: "pointer" }}>
                       🖨️ 진료용 PDF / 인쇄
                     </button>
-                    <a
-                      href="https://map.naver.com/p/search/피부과"
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{
-                        borderRadius: "10px",
-                        padding: "0.6rem 0.95rem",
-                        background: "#0f766e",
-                        color: "#fff",
-                        fontWeight: 700,
-                        textDecoration: "none",
-                        fontSize: "0.86rem",
-                        display: "inline-flex",
-                        alignItems: "center",
-                      }}
-                    >
+                    <a href="https://map.naver.com/p/search/피부과" target="_blank" rel="noreferrer" style={{ borderRadius: "10px", padding: "0.6rem 0.95rem", background: "#0f766e", color: "#fff", fontWeight: 700, textDecoration: "none", fontSize: "0.86rem", display: "inline-flex", alignItems: "center" }}>
                       🏥 주변 피부과
                     </a>
-                    <a
-                      href="https://map.naver.com/p/search/약국"
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{
-                        borderRadius: "10px",
-                        padding: "0.6rem 0.95rem",
-                        background: "#0369a1",
-                        color: "#fff",
-                        fontWeight: 700,
-                        textDecoration: "none",
-                        fontSize: "0.86rem",
-                        display: "inline-flex",
-                        alignItems: "center",
-                      }}
-                    >
+                    <a href="https://map.naver.com/p/search/약국" target="_blank" rel="noreferrer" style={{ borderRadius: "10px", padding: "0.6rem 0.95rem", background: "#0369a1", color: "#fff", fontWeight: 700, textDecoration: "none", fontSize: "0.86rem", display: "inline-flex", alignItems: "center" }}>
                       💊 주변 약국
                     </a>
-                    <button
-                      type="button"
-                      onClick={handleCreateShareLink}
-                      style={{
-                        border: "none",
-                        borderRadius: "10px",
-                        padding: "0.6rem 0.95rem",
-                        background: "#1e293b",
-                        color: "#fff",
-                        fontWeight: 700,
-                        cursor: "pointer",
-                      }}
-                    >
+                    <button type="button" onClick={handleCreateShareLink} style={{ border: "none", borderRadius: "10px", padding: "0.6rem 0.95rem", background: "#1e293b", color: "#fff", fontWeight: 700, cursor: "pointer" }}>
                       🔗 가족 공유 링크
                     </button>
                   </div>
@@ -862,7 +829,6 @@ export default function App() {
                   )}
                 </div>
 
-                {/* DUR 경고 */}
                 {report.guide.dur_warnings?.length > 0 ? (
                   report.guide.dur_warnings.map((w, idx) => (
                     <div key={idx} className="alert-danger">
@@ -871,52 +837,31 @@ export default function App() {
                     </div>
                   ))
                 ) : (
-                  <div className="alert-success">
-                    ✅ 입력된 부위 및 처방약에서 특이 DUR 금기 사항이 발견되지 않았습니다.
-                  </div>
+                  <div className="alert-success">✅ 입력된 부위 및 처방약에서 특이 DUR 금기 사항이 발견되지 않았습니다.</div>
                 )}
 
-                {/* XAI Grad-CAM 시각화 */}
                 <div className="card">
                   <div className="progress-header">
                     <h2 className="card-title" style={{ margin: 0 }}>2. AI 병변 스크리닝 & Grad-CAM 히트맵</h2>
                     <span className="status-pill">{report.screening.risk_level}</span>
                   </div>
-
                   <div className="xai-grid" style={{ marginTop: "1rem" }}>
                     <div style={{ textAlign: "center" }}>
                       <div className="xai-viewer">
                         <img src={resolveImageUrl(report.screening.original_image_url)} alt="원본 병변" />
-                        <img
-                          src={resolveImageUrl(report.screening.gradcam_image_url)}
-                          alt="Grad-CAM 히트맵"
-                          style={{ opacity: heatmapOpacity / 100 }}
-                        />
+                        <img src={resolveImageUrl(report.screening.gradcam_image_url)} alt="Grad-CAM" style={{ opacity: heatmapOpacity / 100 }} />
                       </div>
                       <div className="no-print" style={{ marginTop: "0.6rem" }}>
                         <label className="form-label">히트맵 투명도 조절: {heatmapOpacity}%</label>
-                        <input
-                          type="range"
-                          min="0"
-                          max="100"
-                          value={heatmapOpacity}
-                          onChange={(e) => setHeatmapOpacity(Number(e.target.value))}
-                          style={{ width: "90%" }}
-                        />
+                        <input type="range" min="0" max="100" value={heatmapOpacity} onChange={(e) => setHeatmapOpacity(Number(e.target.value))} style={{ width: "90%" }} />
                       </div>
                     </div>
-
                     <div>
                       <div className="disease-highlight">
                         <div className="form-hint">1순위 예측 질환</div>
-                        <h3 className="disease-name">
-                          {report.screening.primary_disease_name} ({(report.screening.confidence_score * 100).toFixed(1)}%)
-                        </h3>
-                        <div style={{ fontSize: "0.86rem", color: "#475569" }}>
-                          {report.screening.visual_finding_summary}
-                        </div>
+                        <h3 className="disease-name">{report.screening.primary_disease_name} ({(report.screening.confidence_score * 100).toFixed(1)}%)</h3>
+                        <div style={{ fontSize: "0.86rem", color: "#475569" }}>{report.screening.visual_finding_summary}</div>
                       </div>
-
                       <div className="form-label">후보 질환 확률 분포 (Top-3)</div>
                       {report.screening.top3_candidates.map((c, idx) => (
                         <div key={idx} className="top3-item">
@@ -933,24 +878,20 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* FTU 및 복약 가이드 */}
                 <div className="card">
                   <h2 className="card-title">3. 맞춤형 FTU 정량 도포 및 복약 가이드</h2>
                   <div className="ftu-box">
                     <strong>
-                      📏 권장 도포량 ({report.guide.ftu_dosage_guide.body_part_label}):{" "}
-                      {report.guide.ftu_dosage_guide.recommended_ftu} FTU ({report.guide.ftu_dosage_guide.recommended_grams}g)
+                      📏 권장 도포량 ({report.guide.ftu_dosage_guide.body_part_label}): {report.guide.ftu_dosage_guide.recommended_ftu} FTU ({report.guide.ftu_dosage_guide.recommended_grams}g)
                     </strong>
                     <div>{report.guide.ftu_dosage_guide.instruction}</div>
                   </div>
-
                   {report.guide.medication_guide.map((m, idx) => (
                     <div key={idx} className="med-item">
                       <strong>💊 {m.drug_name} ({m.ingredient})</strong>
                       <p style={{ margin: "0.35rem 0 0 0", fontSize: "0.86rem", color: "#475569" }}>{m.guidance_summary}</p>
                     </div>
                   ))}
-
                   <div className="two-col-grid">
                     <div className="sub-box">
                       <strong style={{ color: "#15803d" }}>🌿 생활 습관 관리</strong>
@@ -969,7 +910,6 @@ export default function App() {
                       </ol>
                     </div>
                   </div>
-
                   <hr style={{ margin: "1.2rem 0", borderColor: "#e2e8f0" }} />
                   <div className="form-hint">
                     <strong>📚 RAG 인용 근거 출처:</strong>

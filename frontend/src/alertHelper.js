@@ -1,0 +1,35 @@
+export function speakKoreanText(text) {
+  if (!("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = "ko-KR";
+  utterance.rate = 0.96;
+  utterance.pitch = 1.05;
+  window.speechSynthesis.speak(utterance);
+}
+
+export async function triggerMedicationAlert(drugName, dosageNote, ttsEnabled = true) {
+  const title = `⏰ [복약·도포 알림] ${drugName}`;
+  const bodyText = `${drugName} 사용 시간입니다. ${dosageNote || "정량을 지켜 사용해 주세요."}`;
+
+  if (ttsEnabled) {
+    speakKoreanText(`메디가이드 복약 알림입니다. ${bodyText}`);
+  }
+
+  if ("Notification" in window) {
+    if (Notification.permission === "granted") {
+      new Notification(title, { body: bodyText });
+    } else if (Notification.permission !== "denied") {
+      const perm = await Notification.requestPermission();
+      if (perm === "granted") {
+        new Notification(title, { body: bodyText });
+      }
+    }
+  }
+
+  return {
+    title,
+    bodyText,
+    time: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }),
+  };
+}
