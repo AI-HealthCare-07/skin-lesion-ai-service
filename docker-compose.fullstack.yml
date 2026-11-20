@@ -4,8 +4,10 @@ services:
     container_name: mediguide_mysql_full
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: mediguide_db
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       TZ: Asia/Seoul
     ports:
       - "3306:3306"
@@ -41,7 +43,7 @@ services:
     restart: always
     command: uvicorn backend.main:app --host 0.0.0.0 --port 8000
     environment:
-      DATABASE_URL: mysql+pymysql://root:rootpassword@mysql:3306/mediguide_db
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       QDRANT_HOST: qdrant
@@ -66,7 +68,7 @@ services:
     restart: always
     command: python -m ai_worker.worker
     environment:
-      DATABASE_URL: mysql+pymysql://root:rootpassword@mysql:3306/mediguide_db
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       QDRANT_HOST: qdrant
