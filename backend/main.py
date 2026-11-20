@@ -20,6 +20,7 @@ from sqlalchemy import Boolean
 from backend import auth
 import re
 from fastapi import File, UploadFile
+from datetime import date
 
 load_dotenv()
 

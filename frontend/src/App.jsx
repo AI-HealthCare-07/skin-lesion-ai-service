@@ -5,13 +5,23 @@ import ReportChatBox from "./ReportChatBox";
 import EmergencyTriageBanner from "./EmergencyTriageBanner";
 import PersonalDurBanner from "./PersonalDurBanner";
 import MainWelcomePanel from "./MainWelcomePanel";
+import AppFooter from "./AppFooter";
+import ClinicalGuideCard from "./ClinicalGuideCard";
 
 const API_BASE = "http://127.0.0.1:8000";
 
 export default function App() {
+  
   const shareTokenFromUrl = new URLSearchParams(window.location.search).get("share");
   const [sharedData, setSharedData] = useState(null);
   const [shareError, setShareError] = useState(null);
+  const [largeTextMode, setLargeTextMode] = useState(false);
+
+const toggleLargeTextMode = () => {
+  const next = !largeTextMode;
+  setLargeTextMode(next);
+  document.documentElement.style.fontSize = next ? "18.5px" : "16px";
+};
 
   // JWT 인증 및 탭 상태
   const [currentUser, setCurrentUser] = useState(null);
@@ -61,6 +71,36 @@ export default function App() {
 
   const toggleSelection = (setList, id) => {
     setList((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
+  const handleApplySampleCase = (sample) => {
+  setBodyPart(sample.bodyPart);
+  setSymptoms(sample.symptoms);
+  setItchScore(sample.itchScore);
+  setPainScore(sample.painScore);
+  setMedications(sample.medications);
+  setUserMemo(sample.userMemo);
+  setSelectedAllergies(sample.allergies);
+  setSelectedConditions(sample.conditions);
+};
+const [onsetDuration, setOnsetDuration] = useState("1주 이내 (급성 발병 · 연고 미사용)");
+  const [showExtraIntake, setShowExtraIntake] = useState(false);
+  const [showScheduler, setShowScheduler] = useState(false);
+
+  const handleResetPatientForm = () => {
+    setBodyPart("FACE");
+    setOnsetDuration("1주 이내 (급성 발병 · 연고 미사용)");
+    setSymptoms("");
+    setItchScore(5);
+    setPainScore(0);
+    setMedications("");
+    setUserMemo("");
+    setSelectedAllergies([]);
+    setSelectedConditions([]);
+    setImageFile(null);
+    setPreviewUrl("");
+    setOcrResultText("");
+    setTaskStatus(null);
+    setReport(null);
   };
 
   // 실시간 복약 스케줄 감시 (15초 주기)
@@ -272,8 +312,7 @@ export default function App() {
     formData.append("symptoms", symptoms);
     formData.append("itch_score", itchScore);
     formData.append("pain_score", painScore);
-    formData.append("user_memo", userMemo);
-    formData.append("current_medications", medications);
+formData.append("user_memo", `[발병·도포이력: ${onsetDuration}] ${userMemo}`);    formData.append("current_medications", medications);
     if (imageFile) formData.append("image", imageFile);
 
     try {
@@ -400,46 +439,63 @@ export default function App() {
         </div>
       )}
 
-      <header className="app-header">
+<header className="app-header">
         <div className="header-inner">
           <div>
             <h1 className="header-title">🩺 MediGuide AI</h1>
             <p className="header-sub">설명 가능한(XAI) 피부 병변 스크리닝 & 식약처 DUR 기반 맞춤형 복약 가이드</p>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => setActiveTab("analyze")}
-              style={{
-                border: "none",
-                borderRadius: "999px",
-                padding: "0.4rem 0.95rem",
-                fontWeight: 700,
-                cursor: "pointer",
-                background: activeTab === "analyze" ? "#fff" : "rgba(255,255,255,0.18)",
-                color: activeTab === "analyze" ? "#0a4296" : "#fff",
-              }}
-            >
-              🔬 신규 AI 분석
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                loadHistory(activeUserId);
-                setActiveTab("history");
-              }}
-              style={{
-                border: "none",
-                borderRadius: "999px",
-                padding: "0.4rem 0.95rem",
-                fontWeight: 700,
-                cursor: "pointer",
-                background: activeTab === "history" ? "#fff" : "rgba(255,255,255,0.18)",
-                color: activeTab === "history" ? "#0a4296" : "#fff",
-              }}
-            >
-              📜 내 진단 히스토리 ({historyList.length})
-            </button>
+          <button
+            type="button"
+            onClick={toggleLargeTextMode}
+            style={{
+              border: "1px solid rgba(255,255,255,0.4)",
+              borderRadius: "999px",
+              padding: "0.4rem 0.9rem",
+              fontWeight: 700,
+              cursor: "pointer",
+              background: largeTextMode ? "#fef08a" : "rgba(255,255,255,0.18)",
+              color: largeTextMode ? "#0f172a" : "#fff",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {largeTextMode ? "🔍 기본 글씨로" : "🔍 큰 글씨 모드"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("analyze")}
+            style={{
+              border: "none",
+              borderRadius: "999px",
+              padding: "0.4rem 0.95rem",
+              fontWeight: 700,
+              cursor: "pointer",
+              background: activeTab === "analyze" ? "#fff" : "rgba(255,255,255,0.18)",
+              color: activeTab === "analyze" ? "#0a4296" : "#fff",
+            }}
+          >
+            🔬 신규 AI 분석
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              loadHistory(activeUserId);
+              setActiveTab("history");
+            }}
+            style={{
+              border: "none",
+              borderRadius: "999px",
+              padding: "0.4rem 0.95rem",
+              fontWeight: 700,
+              cursor: "pointer",
+              background: activeTab === "history" ? "#fff" : "rgba(255,255,255,0.18)",
+              color: activeTab === "history" ? "#0a4296" : "#fff",
+            }}
+          >
+            📋 내 진단 히스토리 ({historyList.length})
+          </button>
+              
             {currentUser ? (
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <span className="version-badge">👤 {currentUser.name}님</span>
@@ -657,7 +713,27 @@ export default function App() {
         <main className="main-container">
           <div className="no-print">
             <section className="card">
-              <h2 className="card-title">1. 피부 병변 문진 및 사진 업로드</h2>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem", marginBottom: "1rem" }}>
+                <h2 className="card-title" style={{ margin: 0, whiteSpace: "nowrap" }}>1. 피부 병변 문진</h2>
+                <button
+                  type="button"
+                  onClick={handleResetPatientForm}
+                  style={{
+                    background: "#f1f5f9",
+                    color: "#334155",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: "8px",
+                    padding: "0.35rem 0.7rem",
+                    fontSize: "0.78rem",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  🔄 다음 환자 초기화
+                </button>
+              </div>
+
               <form onSubmit={handleSubmit}>
                 <div className="form-group">
                   <label className="form-label">병변 발생 부위</label>
@@ -685,21 +761,49 @@ export default function App() {
                   </div>
                 </div>
                 <div className="form-group">
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
-                    <label className="form-label" style={{ margin: 0 }}>처방/보유 의약품 (DUR 검증용)</label>
-                    <label style={{ fontSize: "0.78rem", background: "#eff6ff", color: "#0d6efd", border: "1px solid #bfdbfe", padding: "0.25rem 0.6rem", borderRadius: "6px", fontWeight: 700, cursor: "pointer" }}>
-                      {ocrLoading ? "⏳ OCR 스캔 중..." : "📄 약봉투/처방전 OCR 자동입력"}
-                      <input type="file" accept="image/*" onChange={handlePrescriptionOcr} style={{ display: "none" }} />
-                    </label>
-                  </div>
-                  <input type="text" className="form-control" value={medications} onChange={(e) => setMedications(e.target.value)} />
-                  {ocrResultText && <div style={{ fontSize: "0.78rem", color: "#15803d", marginTop: "0.3rem", fontWeight: 600 }}>✅ {ocrResultText}</div>}
-                </div>
-                <div className="form-group">
-                  <label className="form-label">증상 상세 메모</label>
-                  <textarea className="form-control" rows="2" value={userMemo} onChange={(e) => setUserMemo(e.target.value)} />
-                </div>
+  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem", marginBottom: "0.35rem" }}>
+    <label className="form-label" style={{ margin: 0, whiteSpace: "nowrap" }}>처방/보유 의약품</label>
+    <label style={{ fontSize: "0.76rem", background: "#eff6ff", color: "#0d6efd", border: "1px solid #bfdbfe", padding: "0.28rem 0.6rem", borderRadius: "6px", fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+      {ocrLoading ? "⏳ OCR 스캔 중..." : "📄 처방전 OCR 자동입력"}
+      <input type="file" accept="image/*" onChange={handlePrescriptionOcr} style={{ display: "none" }} />
+    </label>
+  </div>
+  <input type="text" className="form-control" value={medications} onChange={(e) => setMedications(e.target.value)} />
+  {ocrResultText && <div style={{ fontSize: "0.78rem", color: "#15803d", marginTop: "0.3rem", fontWeight: 600 }}>✅ {ocrResultText}</div>}
+</div>
+<div className="form-group">
+           <button
+             type="button"
+             onClick={() => setShowExtraIntake(!showExtraIntake)}
+             style={{
+               width: "100%",
+               display: "flex",
+               justifyContent: "space-between",
+               alignItems: "center",
+               background: "#f8fafc",
+               border: "1px solid #cbd5e1",
+               borderRadius: "8px",
+               padding: "0.6rem 0.85rem",
+               fontSize: "0.84rem",
+               fontWeight: 700,
+               color: "#334155",
+               cursor: "pointer",
+             }}
+           >
+             <span>
+               🧬 알레르기 · 기저질환 · 상세 메모 추가 입력
+               {(selectedAllergies.length + selectedConditions.length) > 0 && (
+                 <span style={{ marginLeft: "0.4rem", color: "#0d6efd" }}>
+                   ({selectedAllergies.length + selectedConditions.length}개 선택됨)
+                 </span>
+               )}
+             </span>
+             <span>{showExtraIntake ? "▲ 접기" : "▼ 펼치기"}</span>
+           </button>
+         </div>
 
+         {showExtraIntake && (
+           <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.85rem", marginBottom: "1rem" }}>
                 {/* 개인 약물 알레르기 · 기저질환 맞춤 DUR 검증 선택 */}
                 <div className="form-group">
                   <label className="form-label">🧬 개인 약물 알레르기 · 기저질환 (맞춤형 DUR 검증)</label>
@@ -751,90 +855,133 @@ export default function App() {
                           cursor: "pointer",
                         }}
                       >
-                        {selectedConditions.includes(item.id) ? "✓ " : "+ "}
+{selectedConditions.includes(item.id) ? "✓ " : "+ "}
                         {item.label}
                       </button>
                     ))}
                   </div>
                 </div>
+              </div>
+            )}
+               
 
-                <div className="form-group">
-                  <label className="form-label">실제 병변 사진 파일 첨부</label>
-                  <input type="file" className="form-control" accept="image/*" onChange={handleFileChange} />
-                  {previewUrl && (
-                    <div className="preview-box">
-                      <img src={previewUrl} alt="업로드 미리보기" />
-                    </div>
-                  )}
-                </div>
+            <div className="form-group">
+              <label className="form-label">실제 병변 사진 파일 첨부</label>
+  <label
+    style={{
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "0.3rem",
+      padding: "0.95rem",
+      border: "1.5px dashed #93c5fd",
+      borderRadius: "10px",
+      background: "#f8fafc",
+      cursor: "pointer",
+      textAlign: "center",
+    }}
+  >
+    <span style={{ fontSize: "1.25rem" }}>📷</span>
+    <span style={{ fontSize: "0.84rem", fontWeight: 700, color: "#0d6efd" }}>
+      {imageFile ? `선택됨: ${imageFile.name}` : "클릭하여 피부 병변 사진 선택 (JPG, PNG)"}
+    </span>
+    <span style={{ fontSize: "0.74rem", color: "#64748b" }}>미첨부 시 입력된 증상·문진 데이터 기반으로 분석됩니다</span>
+    <input type="file" accept="image/*" onChange={handleFileChange} style={{ display: "none" }} />
+  </label>
+  {previewUrl && (
+    <div className="preview-box">
+      <img src={previewUrl} alt="업로드 미리보기" />
+    </div>
+  )}
+</div>
                 <button type="submit" className="btn-submit" disabled={isSubmitting}>
                   {isSubmitting ? "⏳ AI 파이프라인 분석 진행 중..." : "🔍 AI 스크리닝 및 복약 가이드 분석 시작"}
                 </button>
               </form>
             </section>
 
-            {/* 복약·연고 도포 알림 스케줄러 + 실시간 푸시/음성 */}
+           {/* 복약·연고 도포 알림 스케줄러 (접기/펼치기 아코디언) */}
             <section className="card">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem", flexWrap: "wrap", gap: "0.4rem" }}>
-                <h2 className="card-title" style={{ margin: 0 }}>⏰ 복약 · 도포 알림 스케줄러</h2>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                  <button
-                    type="button"
-                    onClick={() => setTtsEnabled((prev) => !prev)}
-                    style={{ border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.28rem 0.55rem", fontSize: "0.76rem", fontWeight: 700, background: ttsEnabled ? "#ecfdf5" : "#f1f5f9", color: ttsEnabled ? "#047857" : "#64748b", cursor: "pointer" }}
-                  >
-                    {ttsEnabled ? "🔊 음성 ON" : "🔇 음성 OFF"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const target = schedules.find((s) => s.is_active) || { drug_name: schedDrug, dosage_note: schedNote };
-                      const info = await triggerMedicationAlert(target.drug_name, target.dosage_note, ttsEnabled);
-                      setAlertBanner(info);
-                    }}
-                    style={{ border: "none", borderRadius: "8px", padding: "0.3rem 0.6rem", fontSize: "0.76rem", fontWeight: 700, background: "#0d6efd", color: "#fff", cursor: "pointer" }}
-                  >
-                    🔔 알림·음성 테스트
-                  </button>
-                </div>
+              <div
+                onClick={() => setShowScheduler(!showScheduler)}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  cursor: "pointer",
+                  marginBottom: showScheduler ? "0.85rem" : 0,
+                }}
+              >
+                <h2 className="card-title" style={{ margin: 0, fontSize: "1.02rem" }}>
+                  ⏰ 복약 · 도포 알림 스케줄러 ({schedules.length}건)
+                </h2>
+                <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "#0d6efd" }}>
+                  {showScheduler ? "▲ 접기" : "▼ 펼치기"}
+                </span>
               </div>
 
-              <form onSubmit={handleAddSchedule} style={{ display: "grid", gap: "0.6rem", marginBottom: "1rem" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 110px", gap: "0.5rem" }}>
-                  <input type="text" className="form-control" placeholder="의약품명" value={schedDrug} onChange={(e) => setSchedDrug(e.target.value)} required />
-                  <input type="time" className="form-control" value={schedTime} onChange={(e) => setSchedTime(e.target.value)} required />
-                </div>
-                <input type="text" className="form-control" placeholder="도포/복용 메모" value={schedNote} onChange={(e) => setSchedNote(e.target.value)} />
-                <button type="submit" className="btn-submit" style={{ background: "#0f766e", padding: "0.6rem" }}>+ 알림 스케줄 추가</button>
-              </form>
-
-              {schedules.length === 0 ? (
-                <div className="form-hint">등록된 복약 알림이 없습니다.</div>
-              ) : (
-                schedules.map((s) => (
-                  <div key={s.schedule_id} className="med-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", opacity: s.is_active ? 1 : 0.55 }}>
-                    <div>
-                      <strong style={{ color: "#0d6efd" }}>{s.alarm_time}</strong> · <strong>{s.drug_name}</strong>
-                      <div className="form-hint" style={{ margin: 0 }}>{s.dosage_note}</div>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-                      <button
-                        type="button"
-                        onClick={() => speakKoreanText(`${s.alarm_time} 알림. ${s.drug_name}. ${s.dosage_note}`)}
-                        style={{ border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.3rem 0.5rem", background: "#fff", cursor: "pointer", fontSize: "0.82rem" }}
-                      >
-                        🔊
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleToggleSchedule(s.schedule_id)}
-                        style={{ border: "none", borderRadius: "8px", padding: "0.35rem 0.65rem", cursor: "pointer", fontWeight: 700, background: s.is_active ? "#dcfce7" : "#e2e8f0", color: s.is_active ? "#166534" : "#475569" }}
-                      >
-                        {s.is_active ? "ON" : "OFF"}
-                      </button>
-                    </div>
+              {showScheduler && (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.75rem" }}>
+                    <button
+                      type="button"
+                      onClick={() => setTtsEnabled((prev) => !prev)}
+                      style={{ border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.28rem 0.55rem", fontSize: "0.76rem", fontWeight: 700, background: ttsEnabled ? "#ecfdf5" : "#f1f5f9", color: ttsEnabled ? "#047857" : "#64748b", cursor: "pointer" }}
+                    >
+                      {ttsEnabled ? "🔊 음성 ON" : "🔇 음성 OFF"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const target = schedules.find((s) => s.is_active) || { drug_name: schedDrug, dosage_note: schedNote };
+                        const info = await triggerMedicationAlert(target.drug_name, target.dosage_note, ttsEnabled);
+                        setAlertBanner(info);
+                      }}
+                      style={{ border: "none", borderRadius: "8px", padding: "0.3rem 0.6rem", fontSize: "0.76rem", fontWeight: 700, background: "#0d6efd", color: "#fff", cursor: "pointer" }}
+                    >
+                      🔔 알림·음성 테스트
+                    </button>
                   </div>
-                ))
+
+                  <form onSubmit={handleAddSchedule} style={{ display: "grid", gap: "0.6rem", marginBottom: "1rem" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 110px", gap: "0.5rem" }}>
+                      <input type="text" className="form-control" placeholder="의약품명" value={schedDrug} onChange={(e) => setSchedDrug(e.target.value)} required />
+                      <input type="time" className="form-control" value={schedTime} onChange={(e) => setSchedTime(e.target.value)} required />
+                    </div>
+                    <input type="text" className="form-control" placeholder="도포/복용 메모" value={schedNote} onChange={(e) => setSchedNote(e.target.value)} />
+                    <button type="submit" className="btn-submit" style={{ background: "#0f766e", padding: "0.6rem" }}>+ 알림 스케줄 추가</button>
+                  </form>
+
+                  {schedules.length === 0 ? (
+                    <div className="form-hint">등록된 복약 알림이 없습니다.</div>
+                  ) : (
+                    schedules.map((s) => (
+                      <div key={s.schedule_id} className="med-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", opacity: s.is_active ? 1 : 0.55 }}>
+                        <div>
+                          <strong style={{ color: "#0d6efd" }}>{s.alarm_time}</strong> · <strong>{s.drug_name}</strong>
+                          <div className="form-hint" style={{ margin: 0 }}>{s.dosage_note}</div>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                          <button
+                            type="button"
+                            onClick={() => speakKoreanText(`${s.alarm_time} 알림. ${s.drug_name}. ${s.dosage_note}`)}
+                            style={{ border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.3rem 0.5rem", background: "#fff", cursor: "pointer", fontSize: "0.82rem" }}
+                          >
+                            🔊
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleSchedule(s.schedule_id)}
+                            style={{ border: "none", borderRadius: "8px", padding: "0.35rem 0.65rem", cursor: "pointer", fontWeight: 700, background: s.is_active ? "#dcfce7" : "#e2e8f0", color: s.is_active ? "#166534" : "#475569" }}
+                          >
+                            {s.is_active ? "ON" : "OFF"}
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </>
               )}
             </section>
           </div>
@@ -853,11 +1000,11 @@ export default function App() {
               </div>
             )}
 
-            {!taskStatus && !report && <MainWelcomePanel />}
-              
+{!taskStatus && !report && <MainWelcomePanel onApplySample={handleApplySampleCase} />}
 
             {report && (
               <>
+              
                 <div className="print-only-header">
                   <h2 style={{ margin: 0, color: "#0a4296" }}>🩺 MediGuide AI - 피부과 진료 참고용 요약 리포트</h2>
                   <div style={{ fontSize: "0.9rem", color: "#334155", marginTop: "0.35rem" }}>
@@ -1004,6 +1151,7 @@ export default function App() {
           </section>
         </main>
       )}
+      <AppFooter />
     </div>
   );
 }
