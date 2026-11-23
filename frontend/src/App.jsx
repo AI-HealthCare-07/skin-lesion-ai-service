@@ -10,6 +10,30 @@ import ClinicalGuideCard from "./ClinicalGuideCard";
 
 const API_BASE = "http://127.0.0.1:8000";
 
+// 약품 요약 텍스트에서 중복 헤더([약품|성분|등급])를 분리하고 항목별 줄바꿈을 생성하는 헬퍼
+function parseMedicationSummary(rawText = "") {
+  let gradeBadge = "";
+  let body = rawText.trim();
+
+  const headerMatch = body.match(/^\[([^\]]+)\]\s*/);
+  if (headerMatch) {
+    const parts = headerMatch[1].split("|").map((p) => p.trim());
+    if (parts.length >= 3) {
+      gradeBadge = parts[2];
+    }
+    body = body.slice(headerMatch[0].length).trim();
+  }
+
+  const sectionRegex = /(효능·효과:|효능:|용법·용량:|용법:|사용상 주의사항 및 DUR 부위 금기:|사용상 주의사항:|주의사항:)/g;
+  const formattedBody = body.replace(sectionRegex, "\n$1").trim();
+  const lines = formattedBody
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  return { gradeBadge, lines };
+}
+
 export default function App() {
   const shareTokenFromUrl = new URLSearchParams(window.location.search).get("share");
   const [sharedData, setSharedData] = useState(null);
@@ -64,6 +88,7 @@ export default function App() {
   const [schedTime, setSchedTime] = useState("21:00");
   const [alertBanner, setAlertBanner] = useState(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
+  const [quickAddedDrug, setQuickAddedDrug] = useState("");
 
   const pollTimerRef = useRef(null);
   const lastTriggeredRef = useRef("");
@@ -272,6 +297,29 @@ export default function App() {
       body: JSON.stringify({ user_id: activeUserId, drug_name: schedDrug, dosage_note: schedNote, alarm_time: schedTime }),
     });
     if (res.ok) await loadSchedules(activeUserId);
+  };
+
+  const handleQuickAddSchedule = async (drugName, defaultNote) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/schedules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: activeUserId,
+          drug_name: drugName,
+          dosage_note: defaultNote,
+          alarm_time: "21:00",
+        }),
+      });
+      if (res.ok) {
+        await loadSchedules(activeUserId);
+        setShowScheduler(true);
+        setQuickAddedDrug(drugName);
+        setTimeout(() => setQuickAddedDrug(""), 2500);
+      }
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleToggleSchedule = async (scheduleId) => {
@@ -807,8 +855,30 @@ export default function App() {
 
                   {showExtraIntake && (
                     <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.85rem", marginBottom: "1rem" }}>
-                      {/* 개인 약물 알레르기 · 기저질환 맞춤 DUR 검증 선택 */}
                       <div className="form-group">
+                        <label className="form-label">⏱️ 발병 시기 및 연고 도포 이력</label>
+                        <select className="form-control" value={onsetDuration} onChange={(e) => setOnsetDuration(e.target.value)}>
+                          <option value="1주 이내 (급성 발병 · 연고 미사용)">1주 이내 (급성 발병 · 연고 미사용)</option>
+                          <option value="1~4주 (아급성 · 보습제/일반연고 사용)">1~4주 (아급성 · 보습제/일반연고 사용)</option>
+                          <option value="1개월 이상 (만성·재발성 · 스테로이드 사용 이력)">1개월 이상 (만성·재발성 · 스테로이드 사용 이력)</option>
+                          <option value="연고 도포 후 증상 악화됨">연고 도포 후 증상 악화됨</option>
+                        </select>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">📝 상세 증상 메모</label>
+                        <textarea
+                          className="form-control"
+                          rows={2}
+                          placeholder="예: 밤에 가려움이 심해지고 세안 후 따가움이 있습니다."
+                          value={userMemo}
+                          onChange={(e) => setUserMemo(e.target.value)}
+                          style={{ resize: "vertical" }}
+                        />
+                      </div>
+
+                      {/* 개인 약물 알레르기 · 기저질환 맞춤 DUR 검증 선택 */}
+                      <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label">🧬 개인 약물 알레르기 · 기저질환 (맞춤형 DUR 검증)</label>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.45rem" }}>
                           {[
@@ -1105,7 +1175,7 @@ export default function App() {
           </main>
 
           {report && (
-            <div style={{ maxWidth: "1280px", margin: "1.25rem auto 0 auto", padding: "0 1.25rem" }}>
+            <div style={{ maxWidth: "1280px", margin: "1.25rem auto 0 auto", padding: "0 1.25rem 2.5rem 1.25rem" }}>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(440px, 1fr))", gap: "1.25rem", alignItems: "start" }}>
                 <div className="card" style={{ margin: 0 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.85rem" }}>
@@ -1122,20 +1192,86 @@ export default function App() {
                     <div style={{ marginTop: "0.25rem" }}>{report.guide.ftu_dosage_guide.instruction}</div>
                   </div>
 
-                  <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem", marginTop: "0.85rem" }}>
-                    {report.guide.medication_guide.map((m, idx) => (
-                      <div key={idx} className="med-item" style={{ margin: 0, padding: "0.85rem 1rem" }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.4rem" }}>
-                          <strong style={{ fontSize: "0.95rem", color: "#0f172a" }}>💊 {m.drug_name}</strong>
-                          <span style={{ fontSize: "0.76rem", color: "#475569", background: "#f1f5f9", padding: "0.18rem 0.55rem", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
-                            성분: {m.ingredient}
-                          </span>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginTop: "0.9rem" }}>
+                    {report.guide.medication_guide.map((m, idx) => {
+                      const { gradeBadge, lines } = parseMedicationSummary(m.guidance_summary);
+                      const isHighPotency = gradeBadge.includes("1등급") || gradeBadge.includes("초강력");
+                      return (
+                        <div key={idx} className="med-item" style={{ margin: 0, padding: "0.95rem 1.05rem" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.45rem" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", flexWrap: "wrap" }}>
+                              <strong style={{ fontSize: "0.96rem", color: "#0f172a" }}>💊 {m.drug_name}</strong>
+                              {gradeBadge && (
+                                <span
+                                  style={{
+                                    fontSize: "0.72rem",
+                                    fontWeight: 700,
+                                    padding: "0.18rem 0.52rem",
+                                    borderRadius: "999px",
+                                    background: isHighPotency ? "#fee2e2" : "#eff6ff",
+                                    color: isHighPotency ? "#b91c1c" : "#1d4ed8",
+                                    border: isHighPotency ? "1px solid #fecaca" : "1px solid #bfdbfe",
+                                  }}
+                                >
+                                  {gradeBadge}
+                                </span>
+                              )}
+                            </div>
+
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
+                              <span style={{ fontSize: "0.75rem", color: "#475569", background: "#f1f5f9", padding: "0.18rem 0.55rem", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                                성분: {m.ingredient}
+                              </span>
+                              <button
+                                type="button"
+                                className="no-print"
+                                onClick={() =>
+                                  handleQuickAddSchedule(
+                                    m.drug_name,
+                                    `${report.guide.ftu_dosage_guide.body_part_label} 권장량(${report.guide.ftu_dosage_guide.recommended_ftu} FTU) 기준 복약·도포`
+                                  )
+                                }
+                                style={{
+                                  border: "1px solid #99f6e4",
+                                  background: quickAddedDrug === m.drug_name ? "#0f766e" : "#f0fdfa",
+                                  color: quickAddedDrug === m.drug_name ? "#fff" : "#0f766e",
+                                  borderRadius: "6px",
+                                  padding: "0.18rem 0.52rem",
+                                  fontSize: "0.74rem",
+                                  fontWeight: 700,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                {quickAddedDrug === m.drug_name ? "✓ 스케줄 등록됨" : "⏰ + 알림 등록"}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div style={{ marginTop: "0.6rem", display: "flex", flexDirection: "column", gap: "0.35rem", fontSize: "0.84rem", lineHeight: 1.55, color: "#334155", wordBreak: "keep-all" }}>
+                            {lines.map((line, lineIdx) => {
+                              const colonIndex = line.indexOf(":");
+                              if (colonIndex > 0 && colonIndex < 22) {
+                                const label = line.slice(0, colonIndex + 1);
+                                const content = line.slice(colonIndex + 1).trim();
+                                return (
+                                  <div key={lineIdx} style={{ display: "flex", gap: "0.35rem", alignItems: "flex-start" }}>
+                                    <span style={{ color: "#0d6efd", fontWeight: 700 }}>•</span>
+                                    <span>
+                                      <strong style={{ color: "#1e293b" }}>{label}</strong> {content}
+                                    </span>
+                                  </div>
+                                );
+                              }
+                              return (
+                                <p key={lineIdx} style={{ margin: 0 }}>
+                                  {line}
+                                </p>
+                              );
+                            })}
+                          </div>
                         </div>
-                        <p style={{ margin: "0.5rem 0 0 0", fontSize: "0.85rem", lineHeight: 1.55, color: "#334155", wordBreak: "keep-all" }}>
-                          {m.guidance_summary}
-                        </p>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
 
                   <div className="two-col-grid" style={{ marginTop: "0.95rem" }}>
@@ -1176,7 +1312,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="disclaimer-bar" style={{ marginTop: "1rem" }}>※ {report.disclaimer}</div>
+              <div className="disclaimer-bar" style={{ marginTop: "1.25rem" }}>※ {report.disclaimer}</div>
             </div>
           )}
         </>
