@@ -1131,7 +1131,9 @@ export default function App() {
                   ) : (
                     <div className="alert-success">✅ 입력된 부위 및 처방약에서 특이 DUR 금기 사항이 발견되지 않았습니다.</div>
                   )}
-
+<div className="no-print" style={{ position: "sticky", top: "1rem" }}>
+  <ReportChatBox report={report} bodyPart={bodyPart} />
+</div>
                   <div className="card">
                     <div className="progress-header">
                       <h2 className="card-title" style={{ margin: 0 }}>2. AI 병변 스크리닝 & Grad-CAM 히트맵</h2>
@@ -1175,7 +1177,7 @@ export default function App() {
           </main>
 
           {report && (
-            <div style={{ maxWidth: "1280px", margin: "1.25rem auto 0 auto", padding: "0 1.25rem 2.5rem 1.25rem" }}>
+            <div style={{ maxWidth: "1280px", margin: "1.25rem auto 0 auto", padding: "0 1.25rem 0.5rem 1.25rem" }}>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(440px, 1fr))", gap: "1.25rem", alignItems: "start" }}>
                 <div className="card" style={{ margin: 0 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.85rem" }}>
@@ -1307,12 +1309,12 @@ export default function App() {
                   </details>
                 </div>
 
-                <div style={{ position: "sticky", top: "1rem" }}>
+                <div className="no-print" style={{ position: "sticky", top: "1rem" }}>
                   <ReportChatBox report={report} bodyPart={bodyPart} />
                 </div>
               </div>
 
-              <div className="disclaimer-bar" style={{ marginTop: "1.25rem" }}>※ {report.disclaimer}</div>
+              <div className="disclaimer-bar" style={{ marginTop: "0.6rem" }}>※ {report.disclaimer}</div>
             </div>
           )}
         </>
