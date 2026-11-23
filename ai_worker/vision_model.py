@@ -159,7 +159,8 @@ class SkinLesionGradCAM:
 
         # 상위 3개 후보 질환 정렬
         top3_probs, top3_indices = torch.topk(probs, k=3)
-        top1_idx = int(top3_indices[0].item())
+        # [수정] requires_grad 연결 텐서의 스칼라 변환 경고 방지를 위해 detach() 후 추출
+        top1_idx = int(top3_indices[0].detach().item())
 
         # 2. Top-1 클래스 기준 Backward 수행 -> Grad-CAM 산출
         self.model.zero_grad()
@@ -189,7 +190,8 @@ class SkinLesionGradCAM:
         Image.fromarray(overlay_np).save(gradcam_path)
 
         primary = DERM_CLASSES[top1_idx]
-        top1_conf = float(top3_probs[0].item())
+        # [수정] 확률 스칼라 추출 시 detach() 적용
+        top1_conf = float(top3_probs[0].detach().item())
 
         # 예측 확신도 및 질환 고유 위험도 종합 판정
         dynamic_risk = primary["risk"]
@@ -198,9 +200,9 @@ class SkinLesionGradCAM:
 
         top3_list = [
             {
-                "disease_code": DERM_CLASSES[int(idx)]["code"],
-                "disease_name": DERM_CLASSES[int(idx)]["name"],
-                "probability": round(float(prob), 4),
+                "disease_code": DERM_CLASSES[int(idx.detach().item())]["code"],
+                "disease_name": DERM_CLASSES[int(idx.detach().item())]["name"],
+                "probability": round(float(prob.detach().item()), 4),
             }
             for prob, idx in zip(top3_probs, top3_indices)
         ]

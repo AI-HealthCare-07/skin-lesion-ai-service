@@ -41,10 +41,17 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 COLLECTION_NAME = "mediguide_knowledge"
 
-qdrant_client = QdrantClient(
-    url=f"http://{QDRANT_HOST}:{QDRANT_PORT}",
-    api_key=QDRANT_API_KEY,
-)
+# [수정] QDRANT_API_KEY가 설정된 경우에만 api_key를 전달해 불필요한 insecure connection 경고 방지
+qdrant_url = f"http://{QDRANT_HOST}:{QDRANT_PORT}"
+if QDRANT_API_KEY:
+    qdrant_client = QdrantClient(
+        url=qdrant_url,
+        api_key=QDRANT_API_KEY,
+    )
+else:
+    qdrant_client = QdrantClient(
+        url=qdrant_url,
+    )
 
 print("⏳ [AI Worker] 임베딩 모델(BAAI/bge-m3) 로딩 중...")
 embedder = SentenceTransformer("BAAI/bge-m3")
