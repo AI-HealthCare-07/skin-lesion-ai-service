@@ -177,7 +177,7 @@ export default function App() {
     }
   };
   // 
-// [증상 칩 추가 시작] 다빈도 피부 자각 증상 빠른 선택/해제 로직
+// 다빈도 피부 자각 증상 빠른 선택/해제 로직
   const QUICK_SYMPTOM_CHIPS = [
     "홍반(붉어짐)",
     "각질·인설",
@@ -198,7 +198,7 @@ export default function App() {
       setSymptoms([...currentList, symptomLabel].join(", "));
     }
   };
-  // [증상 칩 추가 끝]
+  //
 
   // 병변 발생 부위별 피부 민감도 · 흡수율 실시간 안내 데이터
   const BODY_PART_SENSITIVITY_INFO = {
