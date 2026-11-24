@@ -1,3 +1,5 @@
+import difflib
+import re
 import os
 import io
 import uuid
@@ -35,7 +37,51 @@ def get_db():
     finally:
         db.close()
 
+# 약물명 표기 변형·오타 보정 및 성분명 표준화 매핑 레이어
 
+STANDARD_MEDICATION_ALIASES = {
+    "더모베이트연고0.05%": ["더모베이트", "더모베이트연고", "더모베이트크림", "클로베타솔", "클로베타솔프로피오네이트"],
+    "리도멕스크림0.15%": ["리도멕스", "리도멕스크림", "리도멕스연고", "프레드니솔론", "프레드니솔론발레로아세테이트"],
+    "에바스텔정10mg": ["에바스텔", "에바스텔정", "에바스틴"],
+    "비판텐연고": ["비판텐", "비판텐연고", "덱스판테놀"],
+    "에스로반연고": ["에스로반", "에스로반연고", "무피로신"],
+    "타이레놀정500mg": ["타이레놀", "타이레놀정", "아세트아미노펜"],
+    "락티케어로션1%": ["락티케어", "락티케어로션", "하이드로코르티손"],
+    "데소나로션0.05%": ["데소나", "데소나로션", "데소나이드"],
+}
+
+
+def normalize_medication_names(raw_meds: list[str]) -> list[str]:
+    """띄어쓰기, 함량 누락, 성분명, 오타 등을 표준 약품명으로 정규화"""
+    normalized = []
+    # 검색용 역인덱스 생성
+    alias_to_standard = {}
+    for std_name, aliases in STANDARD_MEDICATION_ALIASES.items():
+        alias_to_standard[re.sub(r"\s+", "", std_name).lower()] = std_name
+        for alias in aliases:
+            alias_to_standard[re.sub(r"\s+", "", alias).lower()] = std_name
+
+    all_keys = list(alias_to_standard.keys())
+
+    for med in raw_meds:
+        cleaned = re.sub(r"\s+", "", med).strip()
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+
+        # 1) 정확히 일치하는 별칭/성분명이 있는 경우
+        if key in alias_to_standard:
+            std = alias_to_standard[key]
+        else:
+            # 2) 유사도 매칭(오타 보정, 0.72 이상 일치 시 표준 약품명으로 자동 교정)
+            matches = difflib.get_close_matches(key, all_keys, n=1, cutoff=0.72)
+            std = alias_to_standard[matches[0]] if matches else med.strip()
+
+        if std not in normalized:
+            normalized.append(std)
+
+    return normalized
+#
 def ensure_demo_user(db: Session) -> models.User:
     """시연용 기본 사용자(user_id=1)가 DB에 없으면 자동 생성"""
     user = db.query(models.User).filter(models.User.user_id == 1).first()
@@ -64,11 +110,14 @@ async def create_prediction_task(
     task_id = str(uuid.uuid4())
     raw_bytes = await file.read()
 
-    # 1. 위치정보(EXIF) 제거 후 uploads 폴더에 깨끗한 이미지 저장
+    # ✨ [백엔드 1단계 수정] 이미지 손상 예외 처리 + 약물명 표준 정규화 적용
     os.makedirs("uploads", exist_ok=True)
     image_path = f"uploads/{task_id}.jpg"
-    clean_img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
-    clean_img.save(image_path, format="JPEG")
+    try:
+        clean_img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+        clean_img.save(image_path, format="JPEG")
+    except Exception:
+        raise HTTPException(status_code=400, detail="유효하지 않거나 손상된 이미지 파일입니다. JPG/PNG 이미지를 업로드해 주세요.")
 
     # 문자열로 넘어온 JSON 리스트 파싱 (예: '["가려움"]' 또는 '가려움, 붉어짐')
     try:
@@ -77,9 +126,12 @@ async def create_prediction_task(
         symptoms_list = [symptoms] if symptoms else []
 
     try:
-        meds_list = json.loads(current_meds) if current_meds.startswith("[") else [m.strip() for m in current_meds.split(",") if m.strip()]
+        raw_meds_list = json.loads(current_meds) if current_meds.startswith("[") else [m.strip() for m in current_meds.split(",") if m.strip()]
     except Exception:
-        meds_list = [current_meds] if current_meds else []
+        raw_meds_list = [current_meds] if current_meds else []
+
+    # 띄어쓰기·성분명·오타를 표준 약품명으로 정제하여 DUR/RAG 매칭 정확도 보장
+    meds_list = normalize_medication_names(raw_meds_list)
 
     # 2. MySQL에 SkinRecord -> LesionImage -> AnalysisTask 순서대로 적재
     user = ensure_demo_user(db)

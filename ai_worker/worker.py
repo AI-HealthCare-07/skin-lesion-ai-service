@@ -88,45 +88,71 @@ def sync_task_status(db, task_id: str, status: str, progress: int, message: str)
         db.commit()
 
 
-def run_rag_and_dur_pipeline(body_part: str, symptoms: list, meds: list, user: models.User):
-    """Qdrant 벡터 검색 + DUR 부위/프로필 안전 필터링 파이프라인"""
+# 질환별 특화 생활 관리 가이드 사전
+DISEASE_LIFESTYLE_MAP = {
+    "지루성 피부염": "과도한 유분·알코올성 화장품 사용을 피하고, 두피·안면 피지 조절과 충분한 수면을 유지하세요.",
+    "아토피 피부염": "실내 습도를 45~55%로 유지하고, 면 소재 의류 착용 및 하루 2회 이상 세라마이드 보습제를 도포하세요.",
+    "접촉성 피부염": "최근 새로 사용한 화장품·금속·세제 등 의심 접촉 물질을 즉시 중단하고 냉찜질로 열감을 진정시키세요.",
+    "건선": "병변 부위의 각질을 억지로 떼어내지 말고(쾨브너 현상 주의), 보습제를 두껍게 발라 각질 탈락을 완화하세요.",
+    "표재성 진균 감염": "환부를 항상 건조하고 통풍이 잘되게 유지하며, 가족 간 수건·발매트 공동 사용을 피하세요.",
+}
+
+
+def run_rag_and_dur_pipeline(body_part: str, symptoms: list, meds: list, user: models.User, primary_disease: str = ""):
+    """Qdrant 벡터 검색 리랭킹 + 다중 DUR 안전 필터링 + 질환별 맞춤 가이드 파이프라인"""
     meds_str = ", ".join(meds) if meds else "처방약 미입력"
     symptoms_str = ", ".join(symptoms) if symptoms else "일반 피부 발진"
 
     # (1) 검색 질의 구성 및 벡터 임베딩
-    query_text = f"부위: {body_part}, 증상: {symptoms_str}, 처방의약품: {meds_str} 복약 주의사항 및 FTU 도포법"
+    query_text = f"질환: {primary_disease}, 부위: {body_part}, 증상: {symptoms_str}, 처방의약품: {meds_str} 복약 주의사항 및 FTU 도포법"
     query_vector = embedder.encode(query_text).tolist()
 
-    # (2) Qdrant 상위 3개 근거 문서 검색
-    hits = qdrant_client.query_points(
+    # (2) Qdrant 상위 6개 후보 문서 검색 후 처방약 우선 리랭킹(Re-ranking)
+    raw_hits = qdrant_client.query_points(
         collection_name=COLLECTION_NAME,
         query=query_vector,
-        limit=3,
+        limit=6,
     ).points
+
+    # 실제 입력된 처방약과 매칭되는 문서를 최상단으로 우선 정렬
+    def hit_priority(h):
+        d_name = h.payload.get("drug_name", "")
+        matched = any(m in d_name or d_name in m for m in meds)
+        return (1 if matched else 0, h.score)
+
+    hits = sorted(raw_hits, key=hit_priority, reverse=True)
 
     dur_warnings = []
     medication_guide = []
     retrieved_sources = []
+    steroid_drugs_found = []
 
     for hit in hits:
         payload = hit.payload
         doc_id = payload.get("doc_id", "UNKNOWN")
         drug_name = payload.get("drug_name", "")
-        potency = payload.get("steroid_potency_class", 0)
+        potency = int(payload.get("steroid_potency_class", 0) or 0)
         safe_for_face = payload.get("safe_for_face", True)
 
-        # 인용 근거 출처 기록 (환각 방지용 Citation)
-        retrieved_sources.append({
-            "doc_id": doc_id,
-            "organization": payload.get("organization", "식약처/학회 지침"),
-            "title": drug_name,
-            "similarity_score": round(hit.score, 4),
-        })
+        is_prescribed = any(m in drug_name or drug_name in m for m in meds)
+        if not is_prescribed and hit.score < 0.52 and len(retrieved_sources) >= 3:
+            continue
+
+        # 인용 근거 출처 기록 (환각 방지용 Citation, 최대 4건)
+        if len(retrieved_sources) < 4:
+            retrieved_sources.append({
+                "doc_id": doc_id,
+                "organization": payload.get("organization", "식약처/학회 지침"),
+                "title": drug_name,
+                "similarity_score": round(hit.score, 4),
+            })
 
         # 처방약과 매칭되거나 관련성이 높은 약품에 대해 DUR & 가이드 조립
-        is_prescribed = any(m in drug_name or drug_name in m for m in meds)
-        if is_prescribed or hit.score >= 0.45:
-            # Rule-Based DUR 1: 안면부 고강도 스테로이드 금기 검증
+        if is_prescribed or hit.score >= 0.55:
+            if potency > 0 and drug_name not in steroid_drugs_found:
+                steroid_drugs_found.append(drug_name)
+
+            # Rule-Based DUR 1: 안면부(FACE) 및 경부(NECK) 고강도 스테로이드 금기/주의 검증
             if body_part == "FACE" and (not safe_for_face or (1 <= potency <= 3)):
                 dur_warnings.append({
                     "severity": "HIGH",
@@ -135,6 +161,17 @@ def run_rag_and_dur_pipeline(body_part: str, symptoms: list, meds: list, user: m
                     "message": (
                         f"'{drug_name}'(스테로이드 {potency}등급)는 안면부(얼굴) 사용 시 피부 위축 및 "
                         "모세혈관 확장 위험이 매우 높으므로 전문의 확인 전 도포를 중단하세요."
+                    ),
+                    "source_id": doc_id,
+                })
+            elif body_part == "NECK" and (1 <= potency <= 2):
+                dur_warnings.append({
+                    "severity": "HIGH",
+                    "warning_type": "NECK_HIGH_POTENCY_CAUTION",
+                    "drug_name": drug_name,
+                    "message": (
+                        f"'{drug_name}'(스테로이드 {potency}등급)는 피부가 얇은 목(경부) 부위에 장기 도포 시 "
+                        "국소 부작용 위험이 높으므로 최소량 단기 사용만 권장됩니다."
                     ),
                     "source_id": doc_id,
                 })
@@ -150,12 +187,26 @@ def run_rag_and_dur_pipeline(body_part: str, symptoms: list, meds: list, user: m
                 })
 
             if payload.get("category") != "대한피부과학회 진료지침":
-                medication_guide.append({
-                    "drug_name": drug_name,
-                    "ingredient": payload.get("ingredient", "-"),
-                    "guidance_summary": payload.get("text", ""),
-                    "source_id": doc_id,
-                })
+                if not any(g["drug_name"] == drug_name for g in medication_guide):
+                    medication_guide.append({
+                        "drug_name": drug_name,
+                        "ingredient": payload.get("ingredient", "-"),
+                        "guidance_summary": payload.get("text", ""),
+                        "source_id": doc_id,
+                    })
+
+    # Rule-Based DUR 3: 동일 효능군(외용 스테로이드) 2종 이상 중복 보유 경고
+    if len(steroid_drugs_found) >= 2:
+        dur_warnings.append({
+            "severity": "MODERATE",
+            "warning_type": "DUPLICATE_STEROID_THERAPY",
+            "drug_name": ", ".join(steroid_drugs_found),
+            "message": (
+                f"외용 스테로이드 제제 {len(steroid_drugs_found)}종({', '.join(steroid_drugs_found)})이 동시에 확인되었습니다. "
+                "동일 부위 중복 도포 시 전신 흡수 및 피부 위축 위험이 커지므로 부위별 구분 사용 여부를 의사·약사와 확인하세요."
+            ),
+            "source_id": "MFDS_DUR_DUPLICATE",
+        })
 
     # (3) 부위별 FTU 정량 도포 가이드 계산
     part_label, ftu_amount = FTU_MAP.get(body_part, ("해당 환부", 2.0))
@@ -170,11 +221,18 @@ def run_rag_and_dur_pipeline(body_part: str, symptoms: list, meds: list, user: m
         ),
     }
 
-    return dur_warnings, medication_guide, ftu_dosage_guide, retrieved_sources
+    # (4) 질환별 맞춤 생활 습관 가이드 조립
+    base_lifestyle = [
+        "미온수(32~34°C)로 자극이 적은 약산성 세정제를 사용해 짧게 세안하세요.",
+        "세안 후 3분 이내에 무향료·저자극 보습제를 충분히 도포하세요.",
+    ]
+    disease_tip = DISEASE_LIFESTYLE_MAP.get(primary_disease)
+    if disease_tip:
+        base_lifestyle.insert(0, f"[{primary_disease} 맞춤 관리] {disease_tip}")
+        return dur_warnings, medication_guide, ftu_dosage_guide, retrieved_sources, base_lifestyle
 
-
-def run_worker():
-    redis_client.ping()
+    def run_worker():
+     redis_client.ping()
     print("🚀 [AI Worker] Redis, MySQL, Qdrant RAG 엔진 준비 완료! 작업 대기 중...")
 
     while True:
@@ -201,7 +259,6 @@ def run_worker():
 
         try:
             user = db.query(models.User).filter(models.User.user_id == user_id).first()
-
             image_path = task_data.get("image_path", "uploads/sample_lesion.jpg")
 
             # 1단계: 실제 PyTorch 피부 병변 스크리닝 및 Grad-CAM 히트맵 생성
@@ -233,11 +290,12 @@ def run_worker():
 
             # 2단계: 실제 Qdrant RAG 검색 및 DUR 안전 필터링 실행
             sync_task_status(db, task_id, "RAG_GENERATING", 75, "Qdrant 벡터 DB 의약품·FTU 지침 검색 및 DUR 대조 중...")
-            dur_warnings, medication_guide, ftu_dosage_guide, retrieved_sources = run_rag_and_dur_pipeline(
+            dur_warnings, medication_guide, ftu_dosage_guide, retrieved_sources, custom_lifestyle = run_rag_and_dur_pipeline(
                 body_part=body_part,
                 symptoms=symptoms,
                 meds=meds,
                 user=user,
+                primary_disease=vision_result["primary_disease_name"],
             )
 
             # 3단계: MySQL SCREENING_RESULTS 저장 (실제 모델 추론 결과 반영)
@@ -259,12 +317,9 @@ def run_worker():
                 dur_warnings=dur_warnings,
                 medication_guide=medication_guide,
                 ftu_dosage_guide=ftu_dosage_guide,
-                lifestyle_guide=[
-                    "미온수(32~34°C)로 자극이 적은 약산성 세정제를 사용해 짧게 세안하세요.",
-                    "세안 후 3분 이내에 무향료·저자극 보습제를 충분히 도포하세요.",
-                ],
+                lifestyle_guide=custom_lifestyle,
                 doctor_questions=[
-                    "현재 처방받은 외용제가 해당 부위에 사용하기에 강도가 적절할까요?",
+                    f"'{vision_result['primary_disease_name']}' 소견에 대해 현재 처방받은 외용제의 강도가 적절할까요?",
                     "증상 호전 후 연고를 중단하고 보습제만 유지하는 시점은 언제가 좋을까요?",
                     "항히스타민제 복용 후 졸음이 나타날 경우 복용 시간대를 조절해도 될까요?",
                 ],
@@ -289,7 +344,3 @@ def run_worker():
                     os.remove(image_path)
                 except OSError:
                     pass
-
-
-if __name__ == "__main__":
-    run_worker()

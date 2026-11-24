@@ -15,11 +15,11 @@ from sqlalchemy.orm import Session
 from fastapi.staticfiles import StaticFiles
 from backend import models
 from backend.database import Base, SessionLocal, engine, get_db
-from backend.router import router as predict_router
+# router.py의 약물명 정규화 함수 재사용 + 중복 설정 정리
+from backend.router import router as predict_router, normalize_medication_names
 from sqlalchemy import Boolean
 from backend import auth
 import re
-from fastapi import File, UploadFile
 from datetime import date
 
 load_dotenv()
@@ -30,14 +30,9 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = FastAPI(title="MediGuide AI API", version="0.2.0")
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # 2. CORS 보안 설정
-ALLOWED_ORIGINS = os.getenv(
-    "ALLOWED_ORIGINS", "http://127.0.0.1:5500,http://localhost:3000"
-).split(",")
-
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS", "http://127.0.0.1:5500,http://localhost:3000,http://localhost:5173"
 ).split(",")
@@ -131,8 +126,10 @@ async def create_skin_record(
     else:
         saved_path = "uploads/sample_lesion.jpg"
 
+    # 메인 문진 폼에서 입력된 약물명도 표준 약품명으로 자동 정규화
     symptom_list = [s.strip() for s in symptoms.split(",") if s.strip()]
-    med_list = [m.strip() for m in current_medications.split(",") if m.strip()]
+    raw_med_list = [m.strip() for m in current_medications.split(",") if m.strip()]
+    med_list = normalize_medication_names(raw_med_list)
 
     # (2) SKIN_RECORDS 저장
     new_record = models.SkinRecord(
@@ -557,44 +554,67 @@ class ReportChatRequest(BaseModel):
     dur_warnings: list[str] = []
 
 
+BODY_PART_KR_MAP = {
+    "FACE": "얼굴(안면부)",
+    "NECK": "목(경부)",
+    "ARM": "팔(상지)",
+    "HANDS_FEET": "손·발(수족부)",
+    "TRUNK": "몸통(체간)",
+    "LEG": "다리(하지)",
+}
+
+
 @app.post("/api/v1/chat")
 async def chat_with_report_context(req: ReportChatRequest):
     """현재 분석된 병변 리포트(질환명, 부위, 처방약, DUR 경고) 문맥 기반 맞춤형 Q&A"""
     q = req.question.strip()
     disease = req.primary_disease_name or "피부 병변"
-    part = req.body_part or "환부"
+    raw_part = req.body_part.upper() if req.body_part else ""
+    part = BODY_PART_KR_MAP.get(raw_part, req.body_part or "환부")
     meds_str = ", ".join(req.medications) if req.medications else "보유 의약품"
 
     # 1. DUR 경고 관련 질문 우선 응답
-    if req.dur_warnings and any(k in q for k in ["발라도", "사용", "스테로이드", "부작용", "위험", "주의"]):
+    if req.dur_warnings and any(k in q for k in ["발라도", "사용", "스테로이드", "부작용", "위험", "주의", "중복"]):
         warning_text = " ".join(req.dur_warnings)
         answer = (
             f"현재 리포트에서 감지된 DUR 안전 주의사항을 먼저 확인해 주세요. {warning_text} "
-            f"특히 [{part}] 부위는 약물 흡수율이 다를 수 있으므로, 임의 도포 전 처방의 또는 약사와 상담하시기 바랍니다."
+            f"특히 [{part}] 부위는 피부 두께에 따라 약물 흡수율이 다르므로, 임의 도포 전 처방의 또는 약사와 상담하시기 바랍니다."
         )
-    # 2. 선크림·보습제·세안 순서 질문
+    # 2. FTU 정량 도포법 · 눈 주위·점막 접촉 대처 질문
+    elif any(k in q for k in ["얼마나", "정량", "ftu", "양", "두껍", "눈", "입술", "들어가"]):
+        answer = (
+            f"[{part}] 부위 연고({meds_str}) 도포 시에는 검지 손가락 끝마디 한 줄(1 FTU ≈ 0.5g) 기준의 권장 정량만 얇게 펴 바르세요. "
+            f"약물이 눈이나 입술 점막에 닿았을 경우 즉시 흐르는 미온수나 식염수로 10분 이상 충분히 씻어내고, 따가움이나 시야 흐림이 지속되면 즉시 안과·피부과 진료를 받으셔야 합니다."
+        )
+    # 3. 경구 항히스타민제(먹는 약) 복용법 · 졸음·음주 주의 질문
+    elif any(k in q for k in ["먹는", "알약", "정", "졸음", "졸려", "술", "음주", "에바스텔", "지르텍", "씨잘", "식후"]):
+        answer = (
+            f"보유하신 경구 항히스타민제({meds_str})는 가려움 완화에 도움을 주며, 2세대 제제라도 개인에 따라 졸음이나 나른함이 나타날 수 있습니다. "
+            f"운전이나 정밀 기계 조작 전에는 복용을 주의하시고, 복용 기간 중 음주는 진정 작용을 높일 수 있으므로 반드시 피하시기 바랍니다."
+        )
+    # 4. 선크림·보습제·세안 순서 질문
     elif any(k in q for k in ["선크림", "자외선", "보습", "세안", "순서", "화장"]):
         answer = (
             f"[{disease}] 관리 시에는 미온수로 약산성 세안을 한 뒤 3분 이내에 무향료 보습제를 먼저 충분히 바르세요. "
             f"처방 연고({meds_str})는 보습제 흡수 10~15분 후 환부에만 얇게 펴 바르고, 외출 시 자외선 차단제는 연고가 완전히 흡수된 뒤 덧바르는 것이 안전합니다."
         )
-    # 3. 스테로이드 중단·감량 시점 질문
+    # 5. 스테로이드 중단·감량 시점 질문
     elif any(k in q for k in ["중단", "언제까지", "끊", "감량", "기간", "오래"]):
         answer = (
             f"국소 스테로이드 외용제는 보통 1~2주 이내 단기 사용을 원칙으로 합니다. "
             f"[{disease}]의 붉은기와 가려움이 가라앉으면 갑자기 끊기보다 도포 횟수를 격일로 줄이며 보습제 위주로 전환하는 것이 리바운드(재발) 예방에 도움이 됩니다."
         )
-    # 4. 가려움·냉찜질·응급 대처 질문
+    # 6. 가려움·냉찜질·응급 대처 질문
     elif any(k in q for k in ["가려", "찜질", "긁", "진물", "병원", "응급"]):
         answer = (
             f"[{part}] 부위가 심하게 가려울 때는 손으로 긁지 마시고 깨끗한 거즈에 차가운 식염수나 냉수를 적셔 5~10분간 가볍게 냉찜질해 주세요. "
             f"만약 진물, 고름, 열감이 동반되거나 범위가 급격히 퍼진다면 즉시 피부과 전문의 진료를 받으셔야 합니다."
         )
-    # 5. 기본 리포트 종합 답변
+    # 7. 기본 리포트 종합 답변
     else:
         answer = (
             f"분석된 '{disease}' 소견 및 보유 의약품({meds_str}) 기준으로 안내해 드립니다. "
-            f"권장 FTU 정량을 지켜 환부에만 국소 도포하시고, 보습 관리와 처방 복약 스케줄을 병행해 주세요. "
+            f"권장 FTU 정량을 지켜 [{part}] 환부에만 국소 도포하시고, 보습 관리와 처방 복약 스케줄을 병행해 주세요. "
             f"증상이 1주 이상 호전되지 않으면 출력하신 진료용 PDF 리포트를 지참해 피부과 전문의와 상담하시기 바랍니다."
         )
 
