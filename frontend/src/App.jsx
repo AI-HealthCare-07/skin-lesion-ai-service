@@ -6,11 +6,9 @@ import EmergencyTriageBanner from "./EmergencyTriageBanner";
 import PersonalDurBanner from "./PersonalDurBanner";
 import MainWelcomePanel from "./MainWelcomePanel";
 import AppFooter from "./AppFooter";
-import ClinicalGuideCard from "./ClinicalGuideCard";
 
 const API_BASE = "http://127.0.0.1:8000";
 
-// 약품 요약 텍스트에서 중복 헤더([약품|성분|등급])를 분리하고 항목별 줄바꿈을 생성하는 헬퍼
 function parseMedicationSummary(rawText = "") {
   let gradeBadge = "";
   let body = rawText.trim();
@@ -34,6 +32,52 @@ function parseMedicationSummary(rawText = "") {
   return { gradeBadge, lines };
 }
 
+// 스테로이드 강도 등급(1~7등급) 시각적 게이지 데이터 추출기
+function getSteroidPotencyMeta(drugName = "", gradeBadge = "", guidanceSummary = "") {
+  const combined = `${drugName} ${gradeBadge} ${guidanceSummary}`;
+  const isSteroid =
+    combined.includes("스테로이드") ||
+    /더모베이트|클로베타솔|베타메타손|모메타손|리도멕스|프레드니솔론|데소나|데소나이드|락티케어|하이드로코르티손/i.test(drugName);
+
+  if (!isSteroid) return null;
+
+  let level = 5; // 기본값: 약함~중등도
+  let label = "5등급 · 약한 강도";
+  let guideText = "얼굴·접히는 부위 단기 사용 가능 · 최대 2~3주 이내 권장";
+
+  if (/1등급|초강력|더모베이트|클로베타솔/.test(combined)) {
+    level = 1;
+    label = "1등급 · 초강력";
+    guideText = "최대 1~2주 이내 단기 사용 · 얼굴·사타구니 등 얇은 피부 도포 금지";
+  } else if (/2등급|강력/.test(combined) && !/초강력/.test(combined)) {
+    level = 2;
+    label = "2등급 · 강력";
+    guideText = "최대 2주 이내 사용 · 손·발바닥·두꺼운 병변 위주 도포 권장";
+  } else if (/3등급|중상/.test(combined) || /모메타손|베타메타손/.test(combined)) {
+    level = 3;
+    label = "3등급 · 중상 강도";
+    guideText = "최대 2~3주 이내 · 민감 부위 장기 연속 도포 주의";
+  } else if (/4등급|중등도/.test(combined)) {
+    level = 4;
+    label = "4등급 · 중등도";
+    guideText = "증상 호전 시 감량(테이퍼링) · 최대 3주 이내 사용 권장";
+  } else if (/5등급|약함|리도멕스|프레드니솔론/.test(combined)) {
+    level = 5;
+    label = "5등급 · 약함";
+    guideText = "얼굴·목 등 민감 부위 적용 가능 · 호전 시 보습제로 전환";
+  } else if (/6등급|데소나|데소나이드/.test(combined)) {
+    level = 6;
+    label = "6등급 · 매우 약함";
+    guideText = "소아·민감 피부 비교적 안전 · 눈 주위 과다 도포 주의";
+  } else if (/7등급|최약|락티케어|하이드로코르티손/.test(combined)) {
+    level = 7;
+    label = "7등급 · 최약 강도";
+    guideText = "가장 순한 등급 · 증상 완화 시 주 2회 유지 또는 보습 관리";
+  }
+
+  return { level, label, guideText };
+}
+// 
 export default function App() {
   const shareTokenFromUrl = new URLSearchParams(window.location.search).get("share");
   const [sharedData, setSharedData] = useState(null);
@@ -89,6 +133,21 @@ export default function App() {
   const [alertBanner, setAlertBanner] = useState(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [quickAddedDrug, setQuickAddedDrug] = useState("");
+  // 사후 관리(Aftercare) 도포·복약 체크리스트 & 경과 메모 상태
+  const [aftercareChecks, setAftercareChecks] = useState({
+    morningApply: false,
+    eveningApply: false,
+    moisturizerGap: false,
+    itchImproved: false,
+  });
+  const [aftercareNote, setAftercareNote] = useState("");
+
+  const toggleAftercareCheck = (key) => {
+    setAftercareChecks((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const completedCheckCount = Object.values(aftercareChecks).filter(Boolean).length;
+  // 
 
   const pollTimerRef = useRef(null);
   const lastTriggeredRef = useRef("");
@@ -96,6 +155,28 @@ export default function App() {
   const toggleSelection = (setList, id) => {
     setList((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
   };
+
+  // 다빈도 처방약 빠른 추가 칩 로직
+  const QUICK_MEDICATION_CHIPS = [
+    "더모베이트연고0.05%",
+    "리도멕스크림0.15%",
+    "에바스텔정10mg",
+    "비판텐연고",
+  ];
+
+  const handleToggleQuickMedication = (drugName) => {
+    const currentList = medications
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (currentList.includes(drugName)) {
+      setMedications(currentList.filter((item) => item !== drugName).join(", "));
+    } else {
+      setMedications([...currentList, drugName].join(", "));
+    }
+  };
+  // 
 
   const handleApplySampleCase = (sample) => {
     setBodyPart(sample.bodyPart);
@@ -111,6 +192,7 @@ export default function App() {
   const [onsetDuration, setOnsetDuration] = useState("1주 이내 (급성 발병 · 연고 미사용)");
   const [showExtraIntake, setShowExtraIntake] = useState(false);
   const [showScheduler, setShowScheduler] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
   const handleResetPatientForm = () => {
     setBodyPart("FACE");
@@ -207,6 +289,16 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    const handleBeforePrint = () => {
+      document.querySelectorAll(".report-bottom-wrap details").forEach((el) => {
+        el.setAttribute("open", "true");
+      });
+    };
+    window.addEventListener("beforeprint", handleBeforePrint);
+    return () => window.removeEventListener("beforeprint", handleBeforePrint);
+  }, []);
+
   const handlePrescriptionOcr = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -274,6 +366,15 @@ export default function App() {
       const repData = await res.json();
       setCurrentTaskId(item.task_id);
       setReport(repData);
+      setReport(repData);
+      if (item.body_part) setBodyPart(item.body_part);
+      if (Array.isArray(item.symptoms)) setSymptoms(item.symptoms.join(", "));
+      if (typeof item.itch_score === "number") setItchScore(item.itch_score);
+      if (typeof item.pain_score === "number") setPainScore(item.pain_score);
+      if (Array.isArray(repData?.guide?.medication_guide)) {
+        setMedications(repData.guide.medication_guide.map((m) => m.drug_name).join(", "));
+      }
+      setShareLinkInfo(null);
       setShareLinkInfo(null);
       setTaskStatus({
         status: "COMPLETED",
@@ -325,6 +426,15 @@ export default function App() {
   const handleToggleSchedule = async (scheduleId) => {
     const res = await fetch(`${API_BASE}/api/v1/schedules/${scheduleId}/toggle`, { method: "PATCH" });
     if (res.ok) await loadSchedules(activeUserId);
+  };
+  const handleDeleteSchedule = async (scheduleId) => {
+    try {
+      await fetch(`${API_BASE}/api/v1/schedules/${scheduleId}`, { method: "DELETE" });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSchedules((prev) => prev.filter((item) => item.schedule_id !== scheduleId));
+    }
   };
 
   const handleCreateShareLink = async () => {
@@ -811,6 +921,7 @@ export default function App() {
                       <input type="range" min="0" max="10" value={painScore} onChange={(e) => setPainScore(Number(e.target.value))} style={{ width: "100%" }} />
                     </div>
                   </div>
+                
                   <div className="form-group">
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem", marginBottom: "0.35rem" }}>
                       <label className="form-label" style={{ margin: 0, whiteSpace: "nowrap" }}>처방/보유 의약품</label>
@@ -819,9 +930,48 @@ export default function App() {
                         <input type="file" accept="image/*" onChange={handlePrescriptionOcr} style={{ display: "none" }} />
                       </label>
                     </div>
-                    <input type="text" className="form-control" value={medications} onChange={(e) => setMedications(e.target.value)} />
+                    <input
+                      type="text"
+                      className="form-control"
+                      placeholder="예: 더모베이트연고0.05%, 에바스텔정10mg (쉼표로 구분)"
+                      value={medications}
+                      onChange={(e) => setMedications(e.target.value)}
+                    />
+
+                    {/*다빈도 피부과 처방약 원클릭 빠른 추가 칩 */}
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.38rem", marginTop: "0.45rem" }}>
+                      <span style={{ fontSize: "0.73rem", color: "#64748b", fontWeight: 600 }}>빠른 추가:</span>
+                      {QUICK_MEDICATION_CHIPS.map((drug) => {
+                        const isSelected = medications
+                          .split(",")
+                          .map((m) => m.trim())
+                          .includes(drug);
+                        return (
+                          <button
+                            key={drug}
+                            type="button"
+                            onClick={() => handleToggleQuickMedication(drug)}
+                            style={{
+                              border: isSelected ? "1px solid #0d6efd" : "1px solid #cbd5e1",
+                              background: isSelected ? "#eff6ff" : "#f8fafc",
+                              color: isSelected ? "#0d6efd" : "#475569",
+                              borderRadius: "999px",
+                              padding: "0.2rem 0.58rem",
+                              fontSize: "0.74rem",
+                              fontWeight: isSelected ? 700 : 600,
+                              cursor: "pointer",
+                              transition: "all 0.15s ease",
+                            }}
+                          >
+                            {isSelected ? `✓ ${drug}` : `+ ${drug}`}
+                          </button>
+                        );
+                      })}
+                    </div>
+
                     {ocrResultText && <div style={{ fontSize: "0.78rem", color: "#15803d", marginTop: "0.3rem", fontWeight: 600 }}>✅ {ocrResultText}</div>}
                   </div>
+                  
                   <div className="form-group">
                     <button
                       type="button"
@@ -841,15 +991,15 @@ export default function App() {
                         cursor: "pointer",
                       }}
                     >
-                      <span>
-                        🧬 알레르기 · 기저질환 · 상세 메모 추가 입력
-                        {(selectedAllergies.length + selectedConditions.length) > 0 && (
-                          <span style={{ marginLeft: "0.4rem", color: "#0d6efd" }}>
-                            ({selectedAllergies.length + selectedConditions.length}개 선택됨)
-                          </span>
-                        )}
-                      </span>
-                      <span>{showExtraIntake ? "▲ 접기" : "▼ 펼치기"}</span>
+                      <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+  🧬 알레르기 · 기저질환 · 상세 메모
+  {(selectedAllergies.length + selectedConditions.length) > 0 && (
+    <span style={{ marginLeft: "0.35rem", color: "#0d6efd" }}>
+      ({selectedAllergies.length + selectedConditions.length}개)
+    </span>
+  )}
+</span>
+<span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>{showExtraIntake ? "▲ 접기" : "▼ 펼치기"}</span>
                     </button>
                   </div>
 
@@ -877,7 +1027,6 @@ export default function App() {
                         />
                       </div>
 
-                      {/* 개인 약물 알레르기 · 기저질환 맞춤 DUR 검증 선택 */}
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label">🧬 개인 약물 알레르기 · 기저질환 (맞춤형 DUR 검증)</label>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.45rem" }}>
@@ -973,7 +1122,7 @@ export default function App() {
                 </form>
               </section>
 
-              {/* 복약·연고 도포 알림 스케줄러 (접기/펼치기 아코디언) */}
+              {/* 복약·연고 도포 알림 스케줄러 */}
               <section className="card">
                 <div
                   onClick={() => setShowScheduler(!showScheduler)}
@@ -1029,25 +1178,52 @@ export default function App() {
                       <div className="form-hint">등록된 복약 알림이 없습니다.</div>
                     ) : (
                       schedules.map((s) => (
-                        <div key={s.schedule_id} className="med-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", opacity: s.is_active ? 1 : 0.55 }}>
-                          <div>
-                            <strong style={{ color: "#0d6efd" }}>{s.alarm_time}</strong> · <strong>{s.drug_name}</strong>
+                        <div key={s.schedule_id} className="med-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem", opacity: s.is_active ? 1 : 0.6 }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <strong style={{ color: s.is_active ? "#0d6efd" : "#64748b" }}>{s.alarm_time}</strong> · <strong>{s.drug_name}</strong>
                             <div className="form-hint" style={{ margin: 0 }}>{s.dosage_note}</div>
                           </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", flexShrink: 0 }}>
                             <button
                               type="button"
+                              title="음성 미리듣기"
                               onClick={() => speakKoreanText(`${s.alarm_time} 알림. ${s.drug_name}. ${s.dosage_note}`)}
-                              style={{ border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.3rem 0.5rem", background: "#fff", cursor: "pointer", fontSize: "0.82rem" }}
+                              style={{ border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.32rem 0.5rem", background: "#fff", cursor: "pointer", fontSize: "0.8rem" }}
                             >
                               🔊
                             </button>
                             <button
                               type="button"
                               onClick={() => handleToggleSchedule(s.schedule_id)}
-                              style={{ border: "none", borderRadius: "8px", padding: "0.35rem 0.65rem", cursor: "pointer", fontWeight: 700, background: s.is_active ? "#dcfce7" : "#e2e8f0", color: s.is_active ? "#166534" : "#475569" }}
+                              style={{
+                                border: "none",
+                                borderRadius: "8px",
+                                padding: "0.34rem 0.62rem",
+                                cursor: "pointer",
+                                fontWeight: 700,
+                                fontSize: "0.76rem",
+                                background: s.is_active ? "#dcfce7" : "#fee2e2",
+                                color: s.is_active ? "#166534" : "#991b1b",
+                              }}
                             >
-                              {s.is_active ? "ON" : "OFF"}
+                              {s.is_active ? "🔔 ON" : "🔕 OFF"}
+                            </button>
+                            <button
+                              type="button"
+                              title="알림 삭제"
+                              onClick={() => handleDeleteSchedule(s.schedule_id)}
+                              style={{
+                                border: "1px solid #fecaca",
+                                borderRadius: "8px",
+                                padding: "0.32rem 0.5rem",
+                                background: "#fff",
+                                color: "#dc2626",
+                                cursor: "pointer",
+                                fontSize: "0.78rem",
+                                fontWeight: 700,
+                              }}
+                            >
+                              🗑️
                             </button>
                           </div>
                         </div>
@@ -1131,9 +1307,26 @@ export default function App() {
                   ) : (
                     <div className="alert-success">✅ 입력된 부위 및 처방약에서 특이 DUR 금기 사항이 발견되지 않았습니다.</div>
                   )}
-<div className="no-print" style={{ position: "sticky", top: "1rem" }}>
-  <ReportChatBox report={report} bodyPart={bodyPart} />
-</div>
+
+                  {(() => {
+                    const steroidMeds = (report.guide.medication_guide || []).filter(
+                      (m) =>
+                        m.guidance_summary?.includes("스테로이드") ||
+                        /더모베이트|리도멕스|데소나|락티케어|모메타손|베타메타손|클로베타솔|하이드로코르티손|프레드니솔론/i.test(m.drug_name)
+                    );
+                    if (steroidMeds.length >= 2) {
+                      return (
+                        <div className="alert-danger">
+                          <strong>⚠️ [DUR 동일 효능군 중복 주의 - 외용 스테로이드 {steroidMeds.length}종]</strong>
+                          <div>
+                            현재 <strong>{steroidMeds.map((m) => m.drug_name).join(", ")}</strong> 등 외용 스테로이드 제제가 중복 포함되어 있습니다. 동일 부위 중복 도포 시 전신 흡수 및 피부 위축 부작용 위험이 커지므로 부위별 구분 사용 여부를 의사·약사와 반드시 확인하세요.
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+
                   <div className="card">
                     <div className="progress-header">
                       <h2 className="card-title" style={{ margin: 0 }}>2. AI 병변 스크리닝 & Grad-CAM 히트맵</h2>
@@ -1171,14 +1364,14 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                </>
-              )}
-            </section>
-          </main>
+               </>
+                )}
+              </section>
+            </main>
 
           {report && (
-            <div style={{ maxWidth: "1280px", margin: "1.25rem auto 0 auto", padding: "0 1.25rem 0.5rem 1.25rem" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(440px, 1fr))", gap: "1.25rem", alignItems: "start" }}>
+            <>
+              <div className="report-bottom-wrap" style={{ maxWidth: "1280px", margin: "1.25rem auto 0 auto", padding: "0 1.25rem 1.25rem 1.25rem" }}>
                 <div className="card" style={{ margin: 0 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.85rem" }}>
                     <h2 className="card-title" style={{ margin: 0 }}>3. 맞춤형 FTU 정량 도포 및 복약 가이드</h2>
@@ -1198,6 +1391,9 @@ export default function App() {
                     {report.guide.medication_guide.map((m, idx) => {
                       const { gradeBadge, lines } = parseMedicationSummary(m.guidance_summary);
                       const isHighPotency = gradeBadge.includes("1등급") || gradeBadge.includes("초강력");
+                      // 스테로이드 게이지 메타 정보 계산
+                      const steroidMeta = getSteroidPotencyMeta(m.drug_name, gradeBadge, m.guidance_summary);
+                    
                       return (
                         <div key={idx} className="med-item" style={{ margin: 0, padding: "0.95rem 1.05rem" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.45rem" }}>
@@ -1248,7 +1444,61 @@ export default function App() {
                               </button>
                             </div>
                           </div>
-
+                          {/* 스테로이드 1~7등급 시각적 스펙트럼 게이지 바 */}
+                          {steroidMeta && (
+                            <div
+                              style={{
+                                marginTop: "0.6rem",
+                                padding: "0.6rem 0.75rem",
+                                borderRadius: "8px",
+                                background: steroidMeta.level <= 2 ? "#fef2f2" : "#f8fafc",
+                                border: steroidMeta.level <= 2 ? "1px solid #fecaca" : "1px solid #e2e8f0",
+                              }}
+                            >
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.3rem", fontSize: "0.75rem", marginBottom: "0.38rem" }}>
+                                <strong style={{ color: steroidMeta.level <= 2 ? "#b91c1c" : "#1e293b" }}>
+                                  📊 외용 스테로이드 강도 스펙트럼: {steroidMeta.label} (1초강력 → 7최약)
+                                </strong>
+                                <span style={{ color: "#475569", fontWeight: 600 }}>⏱️ {steroidMeta.guideText}</span>
+                              </div>
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "4px" }}>
+                                {[
+                                  { lv: 1, color: "#dc2626", text: "1" },
+                                  { lv: 2, color: "#ea580c", text: "2" },
+                                  { lv: 3, color: "#f59e0b", text: "3" },
+                                  { lv: 4, color: "#eab308", text: "4" },
+                                  { lv: 5, color: "#84cc16", text: "5" },
+                                  { lv: 6, color: "#22c55e", text: "6" },
+                                  { lv: 7, color: "#10b981", text: "7" },
+                                ].map((seg) => {
+                                  const isCurrent = seg.lv === steroidMeta.level;
+                                  return (
+                                    <div
+                                      key={seg.lv}
+                                      style={{
+                                        height: isCurrent ? "16px" : "10px",
+                                        alignSelf: "center",
+                                        borderRadius: "4px",
+                                        background: seg.color,
+                                        opacity: isCurrent ? 1 : 0.28,
+                                        border: isCurrent ? "2px solid #0f172a" : "none",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        fontSize: "0.64rem",
+                                        fontWeight: 800,
+                                        color: "#fff",
+                                        transition: "all 0.2s ease",
+                                      }}
+                                    >
+                                      {isCurrent ? `${seg.text}등급` : ""}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        
                           <div style={{ marginTop: "0.6rem", display: "flex", flexDirection: "column", gap: "0.35rem", fontSize: "0.84rem", lineHeight: 1.55, color: "#334155", wordBreak: "keep-all" }}>
                             {lines.map((line, lineIdx) => {
                               const colonIndex = line.indexOf(":");
@@ -1294,7 +1544,85 @@ export default function App() {
                       </ol>
                     </div>
                   </div>
+                  {/* 진료 후 증상 변화 추적용 도포·복약 체크리스트 & 경과 메모 위젯 */}
+                  <div
+                    style={{
+                      marginTop: "0.95rem",
+                      padding: "0.95rem 1.05rem",
+                      borderRadius: "10px",
+                      background: "#f0fdf4",
+                      border: "1px solid #bbf7d0",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.65rem" }}>
+                      <strong style={{ color: "#166534", fontSize: "0.92rem" }}>
+                        📋 오늘의 도포·복약 자가 체크 & 경과 메모 (인쇄·모바일 겸용)
+                      </strong>
+                      <span
+                        style={{
+                          fontSize: "0.75rem",
+                          fontWeight: 700,
+                          padding: "0.2rem 0.6rem",
+                          borderRadius: "999px",
+                          background: completedCheckCount === 4 ? "#15803d" : "#dcfce7",
+                          color: completedCheckCount === 4 ? "#fff" : "#166534",
+                        }}
+                      >
+                        달성률 {completedCheckCount} / 4 완료
+                      </span>
+                    </div>
 
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.5rem", marginBottom: "0.7rem" }}>
+                      {[
+                        { key: "morningApply", label: "☀️ 아침 처방약 도포 / 복용 완료" },
+                        { key: "eveningApply", label: "🌙 저녁 처방약 도포 / 복용 완료" },
+                        { key: "moisturizerGap", label: "🧴 보습제와 15분 이상 간격 준수" },
+                        { key: "itchImproved", label: "✨ 어제보다 붉은기·가려움 완화됨" },
+                      ].map((item) => {
+                        const checked = aftercareChecks[item.key];
+                        return (
+                          <button
+                            key={item.key}
+                            type="button"
+                            onClick={() => toggleAftercareCheck(item.key)}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "0.45rem",
+                              textAlign: "left",
+                              padding: "0.52rem 0.72rem",
+                              borderRadius: "8px",
+                              border: checked ? "1.5px solid #16a34a" : "1px solid #cbd5e1",
+                              background: checked ? "#dcfce7" : "#ffffff",
+                              color: checked ? "#14532d" : "#334155",
+                              fontSize: "0.81rem",
+                              fontWeight: checked ? 700 : 500,
+                              cursor: "pointer",
+                              transition: "all 0.15s ease",
+                            }}
+                          >
+                            <span style={{ fontSize: "0.95rem" }}>{checked ? "☑️" : "⬜"}</span>
+                            <span>{item.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                      <label style={{ fontSize: "0.78rem", fontWeight: 700, color: "#166534" }}>
+                        ✍️ 오늘의 피부 변화 · 특이 반응 메모 (다음 진료 시 의료진 참고용)
+                      </label>
+                      <input
+                        type="text"
+                        className="form-control"
+                        placeholder="예: 저녁 도포 후 화끈거림 없음, 각질이 절반 정도 가라앉음 (인쇄 시 그대로 출력됩니다)"
+                        value={aftercareNote}
+                        onChange={(e) => setAftercareNote(e.target.value)}
+                        style={{ background: "#ffffff", fontSize: "0.83rem" }}
+                      />
+                    </div>
+                  </div>
+                  
                   <details style={{ marginTop: "1rem", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "0.6rem 0.85rem" }}>
                     <summary style={{ cursor: "pointer", fontSize: "0.8rem", fontWeight: 600, color: "#475569" }}>
                       📚 RAG 의학적 근거 출처 상세 보기 ({report.guide.retrieved_sources?.length || 0}건)
@@ -1306,16 +1634,41 @@ export default function App() {
                         </li>
                       ))}
                     </ul>
+                   
                   </details>
                 </div>
 
-                <div className="no-print" style={{ position: "sticky", top: "1rem" }}>
-                  <ReportChatBox report={report} bodyPart={bodyPart} />
-                </div>
+                <div className="disclaimer-bar" style={{ marginTop: "0.75rem" }}>※ {report.disclaimer}</div>
               </div>
 
-              <div className="disclaimer-bar" style={{ marginTop: "0.6rem" }}>※ {report.disclaimer}</div>
-            </div>
+             {/* 화면 우측 하단 접이식 AI 복약·생활 Q&A 상담 플로팅 위젯 */}
+              <aside className="no-print floating-chat-dock">
+                <details style={{ position: "relative" }}>
+                  <summary
+                    style={{
+                      listStyle: "none",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "0.55rem",
+                      background: "linear-gradient(135deg, #0d6efd 0%, #0a4296 100%)",
+                      color: "#ffffff",
+                      borderRadius: "999px",
+                      padding: "0.85rem 1.35rem",
+                      fontSize: "0.94rem",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      boxShadow: "0 8px 24px rgba(13, 110, 253, 0.35)",
+                      userSelect: "none",
+                    }}
+                  >
+                    <span>💬 AI 복약 · 생활 Q&A 상담 열기 / 접기</span>
+                  </summary>
+                  <div style={{ marginTop: "0.65rem" }}>
+                    <ReportChatBox report={report} bodyPart={bodyPart} />
+                  </div>
+                </details>
+              </aside>
+            </>
           )}
         </>
       )}

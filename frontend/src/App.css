@@ -17,11 +17,13 @@ body {
 }
 
 .header-inner {
-  max-width: 1200px;
+  max-width: 1280px;
   margin: 0 auto;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
 }
 
 .header-title {
@@ -46,13 +48,23 @@ body {
 }
 
 .main-container {
-  max-width: 1200px;
-  margin: 2rem auto;
-  padding: 0 1.25rem 3rem;
+  max-width: 1280px;
+  margin: 1.75rem auto 1.25rem auto;
+  padding: 0 1.25rem;
   display: grid;
-  grid-template-columns: 420px 1fr;
-  gap: 1.5rem;
+  grid-template-columns: 400px 1fr;
+  gap: 1.25rem;
   align-items: start;
+}
+
+.main-container > .no-print {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.main-container > .no-print > .card {
+  margin-bottom: 0;
 }
 
 @media (max-width: 960px) {
@@ -338,6 +350,51 @@ body {
   color: #64748b;
 }
 
+/* 화면 우측 하단 접이식 AI Q&A 상담 플로팅 위젯 */
+.floating-chat-dock {
+  position: fixed;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: calc(100vw - 2.5rem);
+}
+
+.floating-chat-dock details[open] > div {
+  width: 380px;
+  max-width: 100%;
+  max-height: calc(100vh - 8rem);
+  overflow-y: auto;
+  border-radius: 16px;
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.22);
+}
+
+.floating-chat-dock .card {
+  margin-bottom: 0;
+}
+
+/* 와이드 화면에서 본문과 우측 상담 패널이 겹치지 않도록 우측 여백 확보 */
+@media (min-width: 1440px) {
+  .main-container,
+  .report-bottom-wrap {
+    margin-left: auto;
+    margin-right: 400px;
+  }
+}
+
+@media (max-width: 1180px) {
+  .floating-chat-dock {
+    position: static;
+    width: 100%;
+    max-width: 1280px;
+    margin: 0 auto 1.25rem auto;
+    padding: 0 1.25rem;
+    box-shadow: none;
+  }
+}
+
 /* 병원 진료용 PDF / 인쇄 전용 스타일 */
 .print-only-header {
   display: none;
@@ -356,7 +413,8 @@ body {
     display: none !important;
   }
 
-  .main-container {
+  .main-container,
+  .report-bottom-wrap {
     display: block !important;
     max-width: 100% !important;
     padding: 0 !important;
@@ -367,13 +425,32 @@ body {
     box-shadow: none !important;
     border: 1px solid #cbd5e1 !important;
     break-inside: avoid;
-    margin-bottom: 1rem !important;
+    margin-bottom: 0.85rem !important;
   }
 
   .print-only-header {
     display: block !important;
     border-bottom: 2px solid #0d6efd;
-    padding-bottom: 0.75rem;
-    margin-bottom: 1rem;
+    padding-bottom: 0.65rem;
+    margin-bottom: 0.85rem;
+  }
+}
+
+/* [인쇄 품질 개선] 컬러 게이지 배경색 유지 및 카드 중간 잘림 방지 */
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .med-item,
+  .sub-box,
+  .ftu-box,
+  .alert-danger,
+  .alert-success,
+  .report-bottom-wrap details,
+  .report-bottom-wrap > .card > div {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 }
