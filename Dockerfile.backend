@@ -12,8 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt ./requirements.txt
+COPY ai_worker/requirements.txt ./ai_worker-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir -r ai_worker-requirements.txt && \
     pip install --no-cache-dir torch torchvision pillow numpy
 
 COPY . .
