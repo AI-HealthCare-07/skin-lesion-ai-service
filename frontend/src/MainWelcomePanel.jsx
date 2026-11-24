@@ -37,7 +37,28 @@ const SAMPLE_CASES = [
       conditions: ["DIABETES"],
     },
   },
-];
+
+// 스테로이드 중복 경고 & 1·5등급 강도 게이지 비교 시연 케이스
+  {
+    id: "steroid_duplicate",
+    badge: "스테로이드 중복 · 강도 비교",
+    badgeColor: "#1d4ed8",
+    badgeBg: "#dbeafe",
+    title: "팔 습진 + 1등급·5등급 스테로이드 중복 보유",
+    desc: "강도가 다른 외용 스테로이드 2종 동시 입력 시 동일 효능군 중복 경고와 1~7등급 게이지 차이를 비교합니다.",
+    data: {
+      bodyPart: "ARM",
+      symptoms: "홍반(붉어짐), 각질·인설, 심한 가려움",
+      itchScore: 8,
+      painScore: 1,
+      medications: "더모베이트연고0.05%, 리도멕스크림0.15%, 비판텐연고",
+      userMemo: "팔 안쪽 접히는 부위가 붉고 가려워서 집에 있던 연고 두 가지를 같이 바르려 합니다.",
+      allergies: [],
+      conditions: [],
+    },
+  },
+  //
+  ];
 
 const TARGET_DISEASES = [
   { name: "지루성 피부염", tag: "피지·각질", desc: "두피·안면부 홍반과 노란 인설 동반" },

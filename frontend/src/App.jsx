@@ -177,6 +177,81 @@ export default function App() {
     }
   };
   // 
+// [증상 칩 추가 시작] 다빈도 피부 자각 증상 빠른 선택/해제 로직
+  const QUICK_SYMPTOM_CHIPS = [
+    "홍반(붉어짐)",
+    "각질·인설",
+    "심한 가려움",
+    "진물·수포",
+    "따가움·열감",
+  ];
+
+  const handleToggleQuickSymptom = (symptomLabel) => {
+    const currentList = symptoms
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (currentList.includes(symptomLabel)) {
+      setSymptoms(currentList.filter((item) => item !== symptomLabel).join(", "));
+    } else {
+      setSymptoms([...currentList, symptomLabel].join(", "));
+    }
+  };
+  // [증상 칩 추가 끝]
+
+  // 병변 발생 부위별 피부 민감도 · 흡수율 실시간 안내 데이터
+  const BODY_PART_SENSITIVITY_INFO = {
+    FACE: {
+      level: "고위험 민감 부위",
+      bg: "#fef2f2",
+      border: "#fecaca",
+      color: "#b91c1c",
+      icon: "⚠️",
+      text: "안면부: 피부 각질층이 매우 얇아 약물 흡수율이 높음 (고강도 스테로이드 금기 · 약한 등급 권장)",
+    },
+    NECK: {
+      level: "민감 접힘 부위",
+      bg: "#fffbeb",
+      border: "#fde68a",
+      color: "#b45309",
+      icon: "⚡",
+      text: "경부(목): 피부가 얇고 마찰이 잦아 자극 및 위축 위험이 높음 (단기·소량 도포 권장)",
+    },
+    ARM: {
+      level: "중등도 · 접힘 주의",
+      bg: "#eff6ff",
+      border: "#bfdbfe",
+      color: "#1d4ed8",
+      icon: "ℹ️",
+      text: "상지(팔): 일반 부위는 표준 흡수를 보이나, 팔꿈치 안쪽 접히는 부위는 흡수율 증가 주의",
+    },
+    HANDS_FEET: {
+      level: "각질층 두꺼운 부위",
+      bg: "#f0fdf4",
+      border: "#bbf7d0",
+      color: "#15803d",
+      icon: "🛡️",
+      text: "수족부(손·발): 각질층이 두꺼워 약물 투과율이 낮음 (충분한 보습 후 정량 도포 필요)",
+    },
+    TRUNK: {
+      level: "표준 흡수 부위",
+      bg: "#f8fafc",
+      border: "#cbd5e1",
+      color: "#334155",
+      icon: "✅",
+      text: "체간(몸통): 표준 약물 흡수율을 보이는 부위 (권장 FTU 정량 기준 준수)",
+    },
+    LEG: {
+      level: "표준 · 건조 주의",
+      bg: "#f8fafc",
+      border: "#cbd5e1",
+      color: "#334155",
+      icon: "✅",
+      text: "하지(다리): 피부가 건조해지기 쉬운 부위 (세안·샤워 후 3분 이내 보습 병행 권장)",
+    },
+  };
+  //
 
   const handleApplySampleCase = (sample) => {
     setBodyPart(sample.bodyPart);
@@ -907,10 +982,69 @@ export default function App() {
                       <option value="LEG">다리 (LEG)</option>
                     </select>
                   </div>
+                  {/* 부위별 실시간 피부 민감도 & 주의 안내 배지 */}
+                    {BODY_PART_SENSITIVITY_INFO[bodyPart] && (() => {
+                      const info = BODY_PART_SENSITIVITY_INFO[bodyPart];
+                      return (
+                        <div
+                          style={{
+                            marginTop: "0.45rem",
+                            padding: "0.48rem 0.68rem",
+                            borderRadius: "8px",
+                            background: info.bg,
+                            border: `1px solid ${info.border}`,
+                            color: info.color,
+                            fontSize: "0.75rem",
+                            lineHeight: 1.45,
+                            display: "flex",
+                            alignItems: "flex-start",
+                            gap: "0.38rem",
+                            transition: "all 0.2s ease",
+                          }}
+                        >
+                          <span style={{ flexShrink: 0 }}>{info.icon}</span>
+                          <span>
+                            <strong>[{info.level}]</strong> {info.text}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                    {/* */}
                   <div className="form-group">
                     <label className="form-label">주요 자각 증상 (쉼표 구분)</label>
                     <input type="text" className="form-control" value={symptoms} onChange={(e) => setSymptoms(e.target.value)} required />
                   </div>
+                  {/* 주요 자각 증상 빠른 선택 칩 UI */}
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.38rem", marginTop: "0.45rem" }}>
+                      <span style={{ fontSize: "0.73rem", color: "#64748b", fontWeight: 600 }}>빠른 증상:</span>
+                      {QUICK_SYMPTOM_CHIPS.map((sym) => {
+                        const isSelected = symptoms
+                          .split(",")
+                          .map((s) => s.trim())
+                          .includes(sym);
+                        return (
+                          <button
+                            key={sym}
+                            type="button"
+                            onClick={() => handleToggleQuickSymptom(sym)}
+                            style={{
+                              border: isSelected ? "1px solid #0d6efd" : "1px solid #cbd5e1",
+                              background: isSelected ? "#eff6ff" : "#f8fafc",
+                              color: isSelected ? "#0d6efd" : "#475569",
+                              borderRadius: "999px",
+                              padding: "0.2rem 0.58rem",
+                              fontSize: "0.74rem",
+                              fontWeight: isSelected ? 700 : 600,
+                              cursor: "pointer",
+                              transition: "all 0.15s ease",
+                            }}
+                          >
+                            {isSelected ? `✓ ${sym}` : `+ ${sym}`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {/* [증상 칩 추가 끝] */}
                   <div className="form-group slider-row">
                     <div>
                       <label className="form-label">가려움 지수: {itchScore}/10</label>
