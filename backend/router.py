@@ -110,7 +110,7 @@ async def create_prediction_task(
     task_id = str(uuid.uuid4())
     raw_bytes = await file.read()
 
-    # ✨ [백엔드 1단계 수정] 이미지 손상 예외 처리 + 약물명 표준 정규화 적용
+    # 이미지 손상 예외 처리 + 약물명 표준 정규화 적용
     os.makedirs("uploads", exist_ok=True)
     image_path = f"uploads/{task_id}.jpg"
     try:
