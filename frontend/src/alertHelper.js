@@ -33,3 +33,38 @@ export async function triggerMedicationAlert(drugName, dosageNote, ttsEnabled = 
     time: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }),
   };
 }
+
+export function parseMedicationSummary(summaryText) {
+  if (!summaryText || typeof summaryText !== "string") {
+    return { gradeBadge: "", lines: [] };
+  }
+
+  const parts = summaryText
+    .split("|")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  let gradeBadge = "";
+  const bodyParts = [];
+
+  for (const part of parts) {
+    if (!gradeBadge && /(스테로이드|항히스타민|등급|강력|약함)/.test(part) && part.length <= 28) {
+      gradeBadge = part.replace(/^\[|\]$/g, "").trim();
+    } else {
+      bodyParts.push(part);
+    }
+  }
+
+  const lines = bodyParts.map((part) => {
+    const colonIdx = part.indexOf(":");
+    if (colonIdx > 0 && colonIdx < 16) {
+      return {
+        label: part.slice(0, colonIdx).trim(),
+        value: part.slice(colonIdx + 1).trim(),
+      };
+    }
+    return { label: "", value: part };
+  });
+
+  return { gradeBadge, lines };
+}
