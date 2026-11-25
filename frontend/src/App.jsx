@@ -106,7 +106,6 @@ export default function App() {
 
   // 복약 스케줄러 & 음성 알림 상태
   const [schedules, setSchedules] = useState([]);
-<<<<<<< HEAD
   const [schedDrug, setSchedDrug] = useState("리도멕스크림0.15%");
   const [schedNote, setSchedNote] = useState("보습제 15분 후 환부에 2.5 FTU 도포");
   const [schedTime, setSchedTime] = useState("21:00");
@@ -246,28 +245,24 @@ export default function App() {
 
   const [onsetDuration, setOnsetDuration] = useState("1주 이내 (급성 발병 · 연고 미사용)");
   const [showExtraIntake, setShowExtraIntake] = useState(false);
-=======
->>>>>>> 2d41201 (docs: 2026-11-25 프런트엔드 UI 안정화 및 트러블슈팅 내역 정리)
   const [showScheduler, setShowScheduler] = useState(false);
-  const [newAlarmDrug, setNewAlarmDrug] = useState("리도멕스크림0.15%");
-  const [newAlarmTime, setNewAlarmTime] = useState("09:00");
-  const [newAlarmNote, setNewAlarmNote] = useState("보습제 도포 15분 후 환부에 얇게 1 FTU 도포");
-  const [activeAlertBanner, setActiveAlertBanner] = useState(null);
-  const triggeredMinuteRef = useRef("");
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
-  // 음성(TTS) 안내 함수
-  const speakKoreanText = (text) => {
-    try {
-      if ("speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.lang = "ko-KR";
-        utter.rate = 1.0;
-        window.speechSynthesis.speak(utter);
-      }
-    } catch (e) {
-      console.warn("TTS 지원 불가:", e);
-    }
+  const handleResetPatientForm = () => {
+    setBodyPart("FACE");
+    setOnsetDuration("1주 이내 (급성 발병 · 연고 미사용)");
+    setSymptoms("");
+    setItchScore(5);
+    setPainScore(0);
+    setMedications("");
+    setUserMemo("");
+    setSelectedAllergies([]);
+    setSelectedConditions([]);
+    setImageFile(null);
+    setPreviewUrl("");
+    setOcrResultText("");
+    setTaskStatus(null);
+    setReport(null);
   };
 
   // 로그인 세션 복원
